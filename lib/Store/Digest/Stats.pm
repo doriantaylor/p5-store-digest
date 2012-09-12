@@ -1,4 +1,4 @@
-package Store::Digest::Driver::FileSystem;
+package Store::Digest::Stats;
 
 use 5.010;
 use strict;
@@ -7,12 +7,9 @@ use warnings FATAL => 'all';
 use Moose;
 use namespace::autoclean;
 
-use BerkeleyDB  ();
-use Path::Class ();
-
 =head1 NAME
 
-Store::Digest::Driver::FileSystem - File system driver for Store::Digest
+Store::Digest::Stats - Statistical report about data usage in the store
 
 =head1 VERSION
 
@@ -22,31 +19,20 @@ Version 0.01
 
 our $VERSION = '0.01';
 
-has dir => (
-    is       => 'ro',
-    isa      => 'Path::Class::Dir',
-    required => 1,
-);
 
 =head1 SYNOPSIS
 
-    my $store = Store::Digest->new(
-        driver  => 'FileSystem',
-        options => { dir => '/var/db/store-digest' }, # or wherever
-    );
+    my $store = Store::Digest->new;
+
+    my $stats = $store->stats;
 
 =head1 METHODS
 
-=head2 new
+=head2 function1
 
 =cut
 
-sub BUILD {
-    my $self = shift;
-}
-
-sub _create {
-    my $self = shift;
+sub function1 {
 }
 
 =head2 function2
@@ -80,4 +66,4 @@ permissions and limitations under the License.
 
 __PACKAGE__->meta->make_immutable;
 
-1; # End of Store::Digest::Driver::FileSystem
+1; # End of Store::Digest::Stats

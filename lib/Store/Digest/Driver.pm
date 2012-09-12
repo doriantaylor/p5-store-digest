@@ -35,9 +35,11 @@ Perhaps a little code snippet.
 
 =head2 new
 
-create a new store
+Create a new store, or bind to an existing one.
 
 =head2 get
+
+    my $obj = $driver->get('sha-256' => $digest);
 
 Get an object from the store
 
@@ -57,6 +59,12 @@ sub about {
 
 =head2 add
 
+    my $obj = $driver->add(
+        content  => $fh,
+        language => 'en',
+        mtime    => $datetime,
+    );
+
 Add an object to the store
 
 returns a metadata object
@@ -68,6 +76,10 @@ sub add {
 
 =head2 remove
 
+    my $obj = $driver->remove('sha-256' => $digest);
+
+    # $obj->content will be undef and $obj->dtime will be set
+
 Remove an object from the store, leaving its metadata
 
 =cut
@@ -75,13 +87,17 @@ Remove an object from the store, leaving its metadata
 sub remove {
 }
 
-=head2 purge
+=head2 forget
 
-Forget about an object in addition to removing it
+    my $ok = $driver->forget('sha-256' => $digest);
+
+Forget about an object in addition to removing it. Ordinarily,
+removing an object will only delete the content and preserve the
+metadata.
 
 =cut
 
-sub purge {
+sub forget {
 }
 
 =head2 list
@@ -92,13 +108,24 @@ List the objects in the store
 
 =item algorithm
 
+Which cryptographic algorithm to be used as a key
+
 =item start
+
+Starting offset, beginning with 1
 
 =item end
 
+Ending offset, which should be equal to or larger than the starting
+offset.
+
 =item sort
 
+Which field to use to sort the list
+
 =item invert
+
+Whether or not to invert the list
 
 =back
 
@@ -122,19 +149,17 @@ Dorian Taylor, C<< <dorian at cpan.org> >>
 
 =head1 BUGS
 
-Please report any bugs or feature requests to C<bug-store-digest at rt.cpan.org>, or through
-the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Store-Digest>.  I will be notified, and then you'll
-automatically be notified of progress on your bug as I make changes.
-
-
-
+Please report any bugs or feature requests to C<bug-store-digest at
+rt.cpan.org>, or through the web interface at
+L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Store-Digest>.  I
+will be notified, and then you'll automatically be notified of
+progress on your bug as I make changes.
 
 =head1 SUPPORT
 
 You can find documentation for this module with the perldoc command.
 
     perldoc Store::Digest::Driver
-
 
 You can also look for information at:
 
@@ -166,18 +191,15 @@ L<http://search.cpan.org/dist/Store-Digest/>
 
 Copyright 2012 Dorian Taylor.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    L<http://www.apache.org/licenses/LICENSE-2.0>
+Licensed under the Apache License, Version 2.0 (the "License"); you
+may not use this file except in compliance with the License.  You may
+obtain a copy of the License at L<http://www.apache.org/licenses/LICENSE-2.0>
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+implied.  See the License for the specific language governing
+permissions and limitations under the License.
 
 =cut
 

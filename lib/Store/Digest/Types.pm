@@ -1,0 +1,125 @@
+package Store::Digest::Types;
+
+use 5.010;
+use strict;
+use warnings FATAL => 'all';
+
+use Moose;
+use namespace::autoclean;
+
+use MooseX::Types::Moose qw(Maybe Str Int FileHandle HashRef);
+use MooseX::Types -declare => [qw(DateTime DigestURI Seekable FiniteHandle
+                                  DigestHash NonNegativeInt MimeType Token
+                                  )];
+
+use DateTime;
+use URI::di;
+
+=head1 NAME
+
+Store::Digest::Types - Custom types for Store::Digest;
+
+=head1 VERSION
+
+Version 0.01
+
+=cut
+
+our $VERSION = '0.01';
+
+=head1 SYNOPSIS
+
+    package Store::Digest::XYZ;
+
+    use Moose;
+    use namespace::autoclean;
+
+    use Store::Digest::Types;
+
+=head1 TYPES
+
+=head2 DateTime
+
+=cut
+
+subtype DateTime,  as class_type('DateTime');
+
+=head2 DigestHash
+
+=cut
+
+subtype DigestURI, as class_type('URI::di');
+
+subtype DigestHash, as HashRef[DigestURI];
+
+=head2 FiniteHandle
+
+=cut
+
+subtype Seekable,  as class_type('IO::Seekable');
+
+subtype FiniteHandle, as FileHandle|Seekable;
+
+=head2 Token
+
+A token, as described by L<http://tools.ietf.org/html/rfc2616|RFC
+2616>, section 2.2.
+
+=cut
+
+# XXX this screws up
+#my $bads = quotemeta('()<>@,;:\"/[]?={}');
+#my $token = qr![^\x00-x20\x7f-\xff$bads]+!o;
+
+# XXX this is the above, rewritten, and works.
+my $token = qr/[!#\$&'*+.^_`|~0-9A-Za-z-]+/;
+
+# that's what RFC2616 says, which would frankly make for some wackass
+# "tokens".
+
+subtype Token, as Str, where { /^$token$/o };
+
+=head2 MimeType
+
+A registered (or not) MIME type, in C<major/minor> notation.
+
+=cut
+
+subtype MimeType, as Str, where { m!^$token/$token$!o };
+
+=head2 NonNegativeInt
+
+An integer which is zero or greater. Kinda like an unsigned int, I
+suppose, except I don't care about how the underlying integer is
+implemented, I just care that it's at least zero.
+
+=cut
+
+subtype NonNegativeInt, as Int, where { $_ >= 0 };
+
+=head1 AUTHOR
+
+Dorian Taylor, C<< <dorian at cpan.org> >>
+
+=head1 LICENSE AND COPYRIGHT
+
+Copyright 2012 Dorian Taylor.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    L<http://www.apache.org/licenses/LICENSE-2.0>
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+
+=cut
+
+__PACKAGE__->meta->make_immutable;
+
+1; # End of Store::Digest::Types
