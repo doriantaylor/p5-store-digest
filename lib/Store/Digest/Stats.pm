@@ -19,6 +19,25 @@ Version 0.01
 
 our $VERSION = '0.01';
 
+has size => (
+    is  => 'ro',
+    isa => NonNegativeInt,
+);
+
+has objects => (
+    is  => 'ro',
+    isa => NonNegativeInt,
+);
+
+has created => (
+    is => 'ro',
+    isa => DateTime,
+);
+
+has modified => (
+    is  => 'ro',
+    isa => DateTime,
+);
 
 =head1 SYNOPSIS
 

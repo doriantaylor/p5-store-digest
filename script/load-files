@@ -1,0 +1,32 @@
+#!perl
+
+# -*- perl -*-
+
+use strict;
+use warnings FATAL => 'all';
+
+use Store::Digest::Driver::FileSystem;
+use Path::Class;
+use Carp;
+
+my $driver = Store::Digest::Driver::FileSystem->new(dir => '/tmp/store-digest');
+
+for my $path (@ARGV) {
+    Carp::croak("Nonexistent path") unless -e $path;
+    if (-d $path) {
+        $path = Path::Class::Dir->new($path);
+        $path->recurse(callback => sub { do_file($_[0]) unless -d $_[0] });
+    }
+    else {
+        do_file(Path::Class::File->new($path));
+    }
+}
+
+sub do_file {
+    my $file = shift;
+    my $stat = $file->stat;
+    my $fh = $file->openr;
+    my $obj = $driver->add(content => $fh, mtime => $stat->mtime);
+    print STDERR $obj->as_string;
+}
+

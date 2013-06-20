@@ -7,6 +7,10 @@ use warnings FATAL => 'all';
 use Moose;
 use namespace::autoclean;
 
+use Store::Digest::Types qw(FiniteHandle DateTime RFC3066 ContentType Token);
+
+use DateTime;
+
 =head1 NAME
 
 Store::Digest::Driver - Abstract driver for Store::Digest
@@ -19,17 +23,7 @@ Version 0.01
 
 our $VERSION = '0.01';
 
-
 =head1 SYNOPSIS
-
-Quick summary of what the module does.
-
-Perhaps a little code snippet.
-
-    use Store::Digest::Driver;
-
-    my $foo = Store::Digest::Driver->new();
-    ...
 
 =head1 METHODS
 
@@ -41,6 +35,10 @@ Create a new store, or bind to an existing one.
 
     my $obj = $driver->get('sha-256' => $digest);
 
+    # or
+
+    my $obj = $driver->get($uri); # a URI::ni object
+
 Get an object from the store
 
 =cut
@@ -50,7 +48,7 @@ sub get {
 
 =head2 about
 
-Get metadata about an object
+Get metadata about the store itself
 
 =cut
 
@@ -71,7 +69,9 @@ returns a metadata object
 
 =cut
 
+
 sub add {
+    Carp::croak("subclass this yo");
 }
 
 =head2 remove

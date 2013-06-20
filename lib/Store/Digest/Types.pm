@@ -8,12 +8,16 @@ use Moose;
 use namespace::autoclean;
 
 use MooseX::Types::Moose qw(Maybe Str Int FileHandle HashRef);
-use MooseX::Types -declare => [qw(DateTime DigestURI Seekable FiniteHandle
-                                  DigestHash NonNegativeInt MimeType Token
-                                  )];
 
-use DateTime;
-use URI::di;
+use MooseX::Types -declare => [qw(DateTime DigestURI Seekable
+                                  FiniteHandle DigestHash
+                                  NonNegativeInt ContentType RFC3066
+                                  MaybeDateTime MaybeToken
+                                  Token File Directory)];
+
+use DateTime    ();
+use URI::ni     ();
+use Path::Class ();
 
 =head1 NAME
 
@@ -42,13 +46,19 @@ our $VERSION = '0.01';
 
 =cut
 
-subtype DateTime,  as class_type('DateTime');
+subtype DateTime, as class_type('DateTime');
+coerce DateTime,  from Int, via { DateTime->from_epoch(epoch => shift) };
+
+subtype MaybeDateTime, as Maybe[DateTime];
+
+coerce MaybeDateTime, from Maybe[Int],
+    via { $_[0] ? DateTime->from_epoch(epoch => $_[0]) : undef };
 
 =head2 DigestHash
 
 =cut
 
-subtype DigestURI, as class_type('URI::di');
+subtype DigestURI, as class_type('URI::ni');
 
 subtype DigestHash, as HashRef[DigestURI];
 
@@ -59,6 +69,18 @@ subtype DigestHash, as HashRef[DigestURI];
 subtype Seekable,  as class_type('IO::Seekable');
 
 subtype FiniteHandle, as FileHandle|Seekable;
+
+=head2 File and Directory
+
+These are just labels for L<Path::Class> objects.
+
+=cut
+
+subtype File,      as class_type('Path::Class::File');
+subtype Directory, as class_type('Path::Class::Dir');
+
+coerce File,      from Str, via { Path::Class::File->new(shift) };
+coerce Directory, from Str, via { Path::Class::Dir->new(shift)  };
 
 =head2 Token
 
@@ -74,18 +96,23 @@ A token, as described by L<http://tools.ietf.org/html/rfc2616|RFC
 # XXX this is the above, rewritten, and works.
 my $token = qr/[!#\$&'*+.^_`|~0-9A-Za-z-]+/;
 
+
 # that's what RFC2616 says, which would frankly make for some wackass
 # "tokens".
 
 subtype Token, as Str, where { /^$token$/o };
 
-=head2 MimeType
+subtype MaybeToken, as Maybe[Token];
+
+=head2 ContentType
 
 A registered (or not) MIME type, in C<major/minor> notation.
 
 =cut
 
-subtype MimeType, as Str, where { m!^$token/$token$!o };
+subtype ContentType, as Str, where { m!^$token/$token$!o };
+
+subtype RFC3066, as Str, where { m!^[a-zA-Z]{1,8}(-[a-zA-Z0-9]{1,8})*$! };
 
 =head2 NonNegativeInt
 

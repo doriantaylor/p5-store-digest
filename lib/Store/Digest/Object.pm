@@ -9,9 +9,19 @@ use Carp 'verbose';
 use Moose;
 use namespace::autoclean;
 
-use MooseX::Types::Moose qw(Maybe);
-use Store::Digest::Types qw(FiniteHandle DigestHash
-                            NonNegativeInt MimeType Token DateTime);
+use MooseX::Types::Moose qw(Maybe Int);
+
+use Store::Digest::Types qw(FiniteHandle DigestHash NonNegativeInt
+                            ContentType Token DateTime MaybeDateTime
+                            MaybeToken);
+
+# flags
+use constant TYPE_CHECKED     => 1 << 0;
+use constant TYPE_VALID       => 1 << 1;
+use constant CHARSET_CHECKED  => 1 << 2;
+use constant CHARSET_VALID    => 1 << 3;
+use constant ENCODING_CHECKED => 1 << 4;
+use constant ENCODING_VALID   => 1 << 5;
 
 =head1 NAME
 
@@ -74,22 +84,22 @@ has _digests => (
 );
 
 sub digest {
-    my ($self, $digest) = @_;
+    my ($self, $algo) = @_;
     my $d = $self->_digests;
-    unless (defined $digest) {
+    unless (defined $algo) {
         my @k = sort keys %$d;
         return wantarray ? @k : \@k;
     }
 
     # lowercase it
-    $digest = lc $digest;
+    $algo = lc $algo;
 
     # hee hee self-reference
-    Carp::croak("No digest named $digest, only " . join ' ' , $self->digest)
-          unless defined $d->{$digest};
+    Carp::croak("No algorithm named $algo, only " . join ' ' , $self->digest)
+          unless defined $d->{$algo};
 
     # clone the URI so that it can't be messed with
-    $d->{$digest}->clone;
+    $d->{$algo}->clone;
 }
 
 =head2 size
@@ -114,8 +124,8 @@ Returns the MIME type
 
 has type => (
     is       => 'ro',
-    isa      => MimeType,
-    required => 1,
+    isa      => Maybe[ContentType],
+    required => 0,
 );
 
 =head2 charset
@@ -168,6 +178,7 @@ has ctime => (
     is       => 'ro',
     isa      => DateTime,
     required => 1,
+    coerce   => 1,
 );
 
 =head2 mtime
@@ -180,8 +191,9 @@ L</ctime>.
 
 has mtime => (
     is       => 'ro',
-    isa      => Maybe[DateTime],
+    isa      => MaybeDateTime,
     required => 0,
+    coerce   => 1,
 );
 
 =head2 dtime
@@ -193,9 +205,119 @@ applicable.
 
 has dtime => (
     is       => 'ro',
-    isa      => Maybe[DateTime],
+    isa      => MaybeDateTime,
     required => 0,
+    coerce   => 1,
 );
+
+has _flags => (
+    is       => 'ro',
+    isa      => Int,
+    required => 1,
+    default  => 0,
+    init_arg => 'flags',
+);
+
+=head2 type_checked
+
+=cut
+
+sub type_checked {
+    shift->_flags & TYPE_CHECKED;
+}
+
+=head2 type_valid
+
+=cut
+
+sub type_valid {
+    shift->_flags & (TYPE_CHECKED|TYPE_VALID);
+}
+
+=head2 charset_checked
+
+=cut
+
+sub charset_checked {
+    shift->_flags & CHARSET_CHECKED;
+}
+
+=head2 charset_valid
+
+=cut
+
+sub charset_valid {
+    shift->_flags & (CHARSET_CHECKED|CHARSET_VALID);
+}
+
+=head2 encoding_checked
+
+=cut
+
+sub encoding_checked {
+    shift->_flags & ENCODING_CHECKED;
+}
+
+=head2 encoding_valid
+
+=cut
+
+sub encoding_valid {
+    shift->_flags & (ENCODING_CHECKED|ENCODING_VALID);
+}
+
+=head2 as_string
+
+=cut
+
+sub as_string {
+    my $self = shift;
+
+    my %labels = (
+        size     => 'Size (Bytes)',
+        ctime    => 'Added to Store',
+        mtime    => 'Last Modified',
+        dtime    => 'Deleted',
+        type     => 'Content Type',
+        language => '(Natural) Language',
+        charset  => 'Character Set',
+        encoding => 'Content Encoding',
+
+    );
+    my @mandatory = qw(size ctime mtime);
+    my @optional  = qw(dtime type language charset encoding);
+
+    my $out = sprintf "%s\n  Digests:\n", ref $self;
+
+    for my $d ($self->digest) {
+        $out .= sprintf("    %s\n", $self->digest($d));
+    }
+
+    for my $m (qw(size ctime mtime)) {
+        $out .= "  $labels{$m}: " . $self->$m . "\n";
+    }
+    for my $o (qw(dtime type language charset encoding)) {
+        my $val = $self->$o;
+        $out .= "  $labels{$o}: $val\n" if $val;
+    }
+
+    my $f = $self->_flags;
+    my @a = qw(content-type charset content-encoding);
+    my %x = (
+        0 => 'unverified',
+        1 => 'invalid',
+        2 => 'recheck',
+        3 => 'valid',
+    );
+
+    $out .= "  Validation:\n";
+    for my $i (0..$#a) {
+        my $x = ($f >> (3 - $i)) & 3;
+        $out .= sprintf("    %-16s: %s\n", $a[$i], $x{$x});
+    }
+
+    $out;
+}
 
 =head1 AUTHOR
 

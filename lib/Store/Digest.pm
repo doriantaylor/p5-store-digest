@@ -1,12 +1,18 @@
 package Store::Digest;
 
-use 5.006;
+use 5.010;
 use strict;
-use warnings;
+use warnings FATAL => 'all';
+
+use Moose;
+use namespace::autoclean;
+
+# actually this doesn't do what i wanted
+#use Module::Pluggable search_path => __PACKAGE__ . '::Driver';
 
 =head1 NAME
 
-Store::Digest - The great new Store::Digest!
+Store::Digest - Store opaque data objects keyed on their cryptographic digests
 
 =head1 VERSION
 
@@ -19,34 +25,27 @@ our $VERSION = '0.01';
 
 =head1 SYNOPSIS
 
-Quick summary of what the module does.
-
-Perhaps a little code snippet.
-
     use Store::Digest;
 
-    my $foo = Store::Digest->new();
-    ...
+    my $store = Store::Digest->new(
+        driver  => 'FileSystem',
+        options => { dir => '/var/db/store-digest' },
+    );
 
-=head1 EXPORT
+    my $obj = $store->add(
+        content  => $fh,
+        language => 'en',
+        mtime    => DateTime->now,
+    );
 
-A list of functions that can be exported.  You can delete this section
-if you don't export anything, such as for a purely object-oriented module.
-
-=head1 SUBROUTINES/METHODS
+=head1 METHODS
 
 =head2 function1
 
 =cut
 
-sub function1 {
-}
-
-=head2 function2
-
-=cut
-
-sub function2 {
+sub BUILD {
+    
 }
 
 =head1 AUTHOR
@@ -55,12 +54,11 @@ Dorian Taylor, C<< <dorian at cpan.org> >>
 
 =head1 BUGS
 
-Please report any bugs or feature requests to C<bug-store-digest at rt.cpan.org>, or through
-the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Store-Digest>.  I will be notified, and then you'll
-automatically be notified of progress on your bug as I make changes.
-
-
-
+Please report any bugs or feature requests to C<bug-store-digest at
+rt.cpan.org>, or through the web interface at
+L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Store-Digest>.  I
+will be notified, and then you'll automatically be notified of
+progress on your bug as I make changes.
 
 =head1 SUPPORT
 
@@ -91,27 +89,23 @@ L<http://search.cpan.org/dist/Store-Digest/>
 
 =back
 
-
-=head1 ACKNOWLEDGEMENTS
-
-
 =head1 LICENSE AND COPYRIGHT
 
 Copyright 2012 Dorian Taylor.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    L<http://www.apache.org/licenses/LICENSE-2.0>
+Licensed under the Apache License, Version 2.0 (the "License"); you
+may not use this file except in compliance with the License. You may
+obtain a copy of the License at
+L<http://www.apache.org/licenses/LICENSE-2.0>.
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+implied.  See the License for the specific language governing
+permissions and limitations under the License.
 
 =cut
+
+__PACKAGE__->meta->make_immutable;
 
 1; # End of Store::Digest
