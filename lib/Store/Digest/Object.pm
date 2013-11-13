@@ -22,6 +22,8 @@ use constant CHARSET_CHECKED  => 1 << 2;
 use constant CHARSET_VALID    => 1 << 3;
 use constant ENCODING_CHECKED => 1 << 4;
 use constant ENCODING_VALID   => 1 << 5;
+use constant SYNTAX_CHECKED   => 1 << 6;
+use constant SYNTAX_VALID     => 1 << 7;
 
 =head1 NAME
 
@@ -283,6 +285,22 @@ sub encoding_valid {
     shift->_flags & (ENCODING_CHECKED|ENCODING_VALID);
 }
 
+=head2 syntax_checked
+
+=cut
+
+sub syntax_checked {
+    shift->_flags & SYNTAX_CHECKED;
+}
+
+=head2 syntax_valid
+
+=cut
+
+sub syntax_valid {
+    shift->_flags & (SYNTAX_CHECKED|SYNTAX_VALID);
+}
+
 =head2 as_string
 
 =cut
@@ -319,7 +337,7 @@ sub as_string {
     }
 
     my $f = $self->_flags;
-    my @a = qw(content-type charset content-encoding);
+    my @a = qw(content-type charset content-encoding syntax);
     my %x = (
         0 => 'unverified',
         1 => 'invalid',

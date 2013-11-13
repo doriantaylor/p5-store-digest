@@ -657,6 +657,15 @@ sub remove {
         return;
     }
 
+    my $obj = $self->_inflate($bin, $rec);
+
+    # set the dtime if not already set
+
+    # increment deleted objects
+    # delete the file
+    my $file = $self->_file_for($bin);
+
+    $obj;
 }
 
 # also purges

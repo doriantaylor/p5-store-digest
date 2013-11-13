@@ -10,6 +10,8 @@ use namespace::autoclean;
 # actually this doesn't do what i wanted
 #use Module::Pluggable search_path => __PACKAGE__ . '::Driver';
 
+# MooseX::Object::Pluggable maybe?
+
 =head1 NAME
 
 Store::Digest - Store opaque data objects keyed on their cryptographic digests
