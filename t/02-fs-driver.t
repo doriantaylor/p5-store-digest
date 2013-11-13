@@ -19,6 +19,8 @@ my $fh = $mf->openr;
 
 my $obj = $driver->add(content => $fh, mtime => $stat->mtime);
 
-print ($obj->as_string);
+diag($obj->as_string);
 
-$driver->get(URI->new('ni:///md5;w4btxyz'));
+$driver->get(URI->new('ni:///md5;w4bt'));
+
+diag($driver->stats->as_string);

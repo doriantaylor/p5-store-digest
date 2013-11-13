@@ -7,6 +7,8 @@ use warnings FATAL => 'all';
 use Moose;
 use namespace::autoclean;
 
+use Store::Digest::Types qw(DateTime NonNegativeInt);
+
 =head1 NAME
 
 Store::Digest::Stats - Statistical report about data usage in the store
@@ -19,26 +21,6 @@ Version 0.01
 
 our $VERSION = '0.01';
 
-has size => (
-    is  => 'ro',
-    isa => NonNegativeInt,
-);
-
-has objects => (
-    is  => 'ro',
-    isa => NonNegativeInt,
-);
-
-has created => (
-    is => 'ro',
-    isa => DateTime,
-);
-
-has modified => (
-    is  => 'ro',
-    isa => DateTime,
-);
-
 =head1 SYNOPSIS
 
     my $store = Store::Digest->new;
@@ -47,18 +29,81 @@ has modified => (
 
 =head1 METHODS
 
-=head2 function1
+=head2 bytes
+
+Returns the total number of bytes of I<payload> stored.
 
 =cut
 
-sub function1 {
-}
+has bytes => (
+    is  => 'ro',
+    isa => NonNegativeInt,
+);
 
-=head2 function2
+=head2 objects
+
+Returns the total number of I<digests> in the database, including
+those for which the payloads have been removed.
 
 =cut
 
-sub function2 {
+has objects => (
+    is  => 'ro',
+    isa => NonNegativeInt,
+);
+
+=head2 deleted
+
+Returns the number of digests which have had their payloads removed.
+
+=cut
+
+has deleted => (
+    is  => 'ro',
+    isa => NonNegativeInt,
+);
+
+=head2 created
+
+Returns the L<DateTime> the database was created.
+
+=cut
+
+has created => (
+    is => 'ro',
+    isa => DateTime,
+);
+
+=head2 modified
+
+Returns the L<DateTime> the database was last modified.
+
+=cut
+
+has modified => (
+    is  => 'ro',
+    isa => DateTime,
+);
+
+=head2 as_string
+
+Returns the stats as a string.
+
+=cut
+
+sub as_string {
+    my $self = shift;
+my $str = <<EOT;
+Digest store stats:
+  Created on:      %-20s
+  Last Modified:   %-20s
+  Bytes stored:    %-20d
+  Objects stored:  %-20d
+  Objects deleted: %-20d
+EOT
+
+    return sprintf $str,
+        map { $self->$_ } qw(created modified bytes objects deleted);
 }
 
 =head1 AUTHOR

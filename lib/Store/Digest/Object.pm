@@ -9,7 +9,7 @@ use Carp 'verbose';
 use Moose;
 use namespace::autoclean;
 
-use MooseX::Types::Moose qw(Maybe Int);
+use MooseX::Types::Moose qw(Maybe Int CodeRef);
 
 use Store::Digest::Types qw(FiniteHandle DigestHash NonNegativeInt
                             ContentType Token DateTime MaybeDateTime
@@ -57,11 +57,28 @@ will be C<undef>.
 
 =cut
 
-has content => (
-    is       => 'ro',
+# has content => (
+#     is       => 'ro',
+#     required => 0,
+#     isa      => Maybe[FiniteHandle],
+# );
+
+has _content => (
+    is       => 'rw',
     required => 0,
-    isa      => Maybe[FiniteHandle],
+    isa      => Maybe[CodeRef|FiniteHandle],
+    init_arg => 'content',
 );
+
+sub content {
+    my $self = shift;
+    my $content = $self->_content;
+    if ($content and ref $content eq 'CODE') {
+        $content = $content->();
+        $self->_content($content);
+    }
+    $content;
+}
 
 =head2 digest
 
@@ -204,7 +221,7 @@ applicable.
 =cut
 
 has dtime => (
-    is       => 'ro',
+    is       => 'rw',
     isa      => MaybeDateTime,
     required => 0,
     coerce   => 1,

@@ -22,6 +22,8 @@ for my $path (@ARGV) {
     }
 }
 
+print STDERR $driver->stats->as_string;
+
 sub do_file {
     my $file = shift;
     my $stat = $file->stat;

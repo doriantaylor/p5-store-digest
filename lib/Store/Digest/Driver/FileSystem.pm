@@ -15,6 +15,7 @@ use MooseX::Types::Moose qw(HashRef ArrayRef);
 use Store::Digest::Types qw(Directory DateTime Token);
 
 use Store::Digest::Object;
+use Store::Digest::Stats;
 
 use BerkeleyDB qw(DB_CREATE DB_GET_BOTH DB_INIT_CDB DB_INIT_LOCK
                   DB_INIT_TXN DB_INIT_MPOOL DB_NEXT DB_SET_RANGE
@@ -24,12 +25,14 @@ use Path::Class  ();
 use File::Copy   ();
 use MIME::Base32 ();
 use URI::ni      ();
+use Math::BigInt ();
 
 use File::MimeInfo::Magic ();
 
 # directories
-use constant STORE => 'store';
-use constant TEMP  => 'tmp';
+use constant STORE   => 'store';
+use constant TEMP    => 'tmp';
+use constant BUFSIZE => 2**13;
 
 
 # digests with byte lengths
@@ -297,6 +300,29 @@ sub _file_for {
     $self->dir->file(STORE, @parts);
 }
 
+# take an object and return a record
+sub _deflate {
+    my ($self, $obj) = @_;
+
+    # find the primary algorithm
+    my $pri = $self->_primary;
+    my $key = $obj->digest($pri)->digest;
+    # create concatenated string of binary digests
+    my $rec = join('', map { $obj->digest($_)->digest }
+                       grep { $_ ne $pri } $obj->digest);
+
+    # get the rest of the object's contents
+    my @rec = map { $obj->$_ ? $obj->$_->epoch : 0 } qw(ctime mtime dtime);
+    push @rec, $obj->_flags;
+    push @rec, map { $obj->$_ || '' } qw(type language charset encoding);
+    # add them to the record
+    $rec .= pack('NNNCZ*Z*Z*Z*', @rec);
+
+    # optionally return the key
+    return wantarray ? ($rec, $key) : $rec;
+}
+
+# take a record and return an object
 sub _inflate {
     # digest is binary
     my ($self, $digest, $record, $file) = @_;
@@ -329,7 +355,7 @@ sub _inflate {
     if ($file) {
         my $stat    = $file->stat;
         $p{size}    = $stat->size;
-        $p{content} = $file->openr;
+        $p{content} = sub { $file->openr };
     }
 
     $p{digests} = \%rec;
@@ -339,27 +365,30 @@ sub _inflate {
 
 sub add {
     my ($self, %p) = @_;
+    my $pri = $self->_primary;
+    my $ctl = $self->_control;
 
     # open transactions on all databases
     my $txn = $self->_env->txn_begin;
-    $txn->Txn($self->_control, values %{$self->_entries});
+    $txn->Txn($ctl, values %{$self->_entries});
 
-    #map { $_->Txn($txn) } ($self->_control, values %{$self->_entries});
+    # Step 1: record digests as we read the content handle into a
+    # temporary file
 
     # To prevent aborted writes, we don't write files directly. We
     # write tempfiles and then rename them, like rsync does.
-    my $tmpdir = $self->dir->subdir(TEMP);
-    my ($tempfh, $tempname) = $tmpdir->tempfile;
+    my $tempdir = $self->dir->subdir(TEMP);
+    my ($tempfh, $tempname) = $tempdir->tempfile;
     $tempname = Path::Class::File->new($tempname);
 
     # create Digest objects for each algorithm
     my %state = map { $_ => Digest->new(uc $_) } @{$self->_algorithms};
 
-    # remove this
+    # remove this; it's confusing
     my $content = delete $p{content};
 
     # XXX make block size tunable?
-    while ($content->read(my $buf, 8192)) {
+    while ($content->read(my $buf, BUFSIZE)) {
         # as the block is read, pass it into each digest algorithm.
         for my $k (keys %state) {
             $state{$k}->add($buf);
@@ -367,72 +396,26 @@ sub add {
         # and write it back out to the tempfile
         $tempfh->syswrite($buf);
     }
-    # We will have to nuke this tempfile on its own.
+
+    # We will have to nuke this tempfile on our own.
     $tempfh->close;
-    chmod 0400, $tempname;
+    chmod 0400, $tempname; # XXX tunable perms?
 
     # Convert these into digests now
     $p{digests} ||= {};
     for my $k (keys %state) {
-        # The state resets when you take the digest value, so clone it first
-        my $bin = $state{$k}->clone->digest;
-        my $b64 = $state{$k}->clone->b64digest;
-        my $hex = $state{$k}->clone->hexdigest;
-        # don't forget to turn this into
-        utf8::downgrade($bin);
-        # ehh do these too
         $p{digests}{$k} = URI::ni->from_digest($state{$k}, $k);
-
-        # and finally
-        $state{$k} = [$bin, $b64, $hex];
     }
 
-    # Now check if the file is present
-    my $bin    = $state{$self->_primary}[0];
+    # Step 2: move the file into position unless there is already a copy
+
+    my $bin = $p{digests}{$pri}->digest;
+    # don't let perl mistake the binary digest for utf8
+    utf8::downgrade($bin);
     my $target = $self->_file_for($bin);
 
     if (-f $target) {
-        #warn "yo got $target";
-
-        # get rid of the temporary file
         unlink $tempname;
-
-        my $db = $self->_entries->{$self->_primary};
-
-        my $rec = '';
-        $db->db_get($bin, $rec);
-
-        my $p = $self->_primary;
-        my %rec = ($p => URI::ni->from_digest($bin, $p, undef, 256));
-
-        #warn $rec{$p};
-
-        for my $algo (grep { $_ ne $p } @{$self->_algorithms}) {
-            my $b = substr $rec, 0, $DIGESTS{$algo};
-            $rec{$algo} = URI::ni->from_digest($b, $algo, undef, 256);
-            #warn $rec{$algo};
-
-            # set the offset
-            $rec = substr($rec, $DIGESTS{$algo});
-        }
-
-        my $stat = $target->stat;
-
-        @p{qw(ctime mtime dtime flags type language charset encoding)}
-            = unpack('NNNCZ*Z*Z*Z*', $rec);
-
-        # delete the cruft
-        for my $k (qw(dtime type language charset encoding)) {
-            delete $p{$k} unless $p{$k};
-        }
-
-        $p{size}    = $stat->size;
-        $p{content} = $target->openr;
-        $p{digests} = \%rec;
-
-        $txn->txn_commit;
-
-        return Store::Digest::Object->new(%p);
     }
     else {
         my $parent = $target->parent;
@@ -441,118 +424,184 @@ sub add {
 
         # ONLY IF MISSING DO YOU ADD THE FILE
         File::Copy::move($tempname, $target);
+    }
 
-        $p{size} = $target->stat->size;
-        my $now  = time;
+    # Step 2: alter database entries
 
-        my $control = $self->_control;
-        $control->db_get(bytes   => my $dbsize);
-        $control->db_get(objects => my $objects);
+    my $db  = $self->_entries->{$pri};
+    my $now = time;
 
-        $control->db_put(bytes   => $dbsize  + $p{size});
-        $control->db_put(objects => $objects + 1);
-        $control->db_put(mtime   => $now);
+    # if a record is present then we're just replacing the file
+    my $obj;
+    my $rec = '';
+    $db->db_get($bin, $rec);
+    if ($rec) {
+        # create an object because it's easier to deal with
+        $obj = $self->_inflate($bin, $rec);
+        # note this will automatically load the file even if it was
+        # marked deleted, since we already moved it into the tree.
 
-        # get the type by magic
+        # if there is a dtime, clear it
+        if ($obj->dtime and $obj->dtime->epoch > 0) {
+            $obj->dtime(undef);
+
+            # don't forget to decrement the deleted count by 1
+            $ctl->db_get(deleted => my $deleted);
+            $ctl->db_put(deleted =>  --$deleted) if $deleted > 0;
+            # and no matter what, we don't want this number to be negative
+
+            # set the modification time as well
+            $ctl->db_put(mtime   => $now);
+
+            # overwrite the record
+            $rec = $self->_deflate($obj);
+            $db->db_put($bin, $rec);
+        }
+    }
+    else {
+        # set the mappings for the other digest algorithms
+        my $e = $self->_entries;
+        for my $algo (grep { $_ ne $pri } @{$self->_algorithms}) {
+            my $k = $p{digests}{$algo}->digest;
+            utf8::downgrade($k); # dat utf8
+
+            $e->{$algo}->db_put($k, $bin);
+        }
+
+        # tie up loose ends re the file
+        my $stat    = $target->stat;
+        $p{size}    = $stat->size;
+        $p{content} = $target->openr;
+
+        # get the type by magic if it's missing
         $p{type} = File::MimeInfo::Magic::mimetype($target->stringify)
             unless $p{type};
 
-        # create entry record
+        # ctime is required
+        $p{ctime} = $now;
 
-        # XXX wait a sec you only need the primary hash as the value
-        # for the non-primary tables because all they need to do is
-        # look up the primary.
+        # now for the control db
 
-        # concatenate all the hashes together
-        for my $k (keys %state) {
+        # increment byte count by file size
+        $ctl->db_get(bytes   => my $bytes);
+        $ctl->db_put(bytes   => $bytes += $p{size});
+        # increment object count by 1
+        $ctl->db_get(objects => my $objects);
+        $ctl->db_put(objects =>  ++$objects);
+        # set the modification time
+        $ctl->db_put(mtime   => $now);
 
-            my $rec;
+        # create the new object
+        $obj = Store::Digest::Object->new(%p);
 
-            # the entry database for the primary digest algo takes the
-            # additional information about the record
-            if ($k eq $self->_primary) {
-                # concatenate all binary hashes sorted by algorithm, except
-                # for the one which is the key
-                $rec = join('', map { $state{$_}[0] }
-                                grep { $_ ne $k } sort keys %state);
-
-                my $mtime = $p{mtime}->epoch; # blob modification time
-                $p{ctime} = $now;             # record creation time
-                $p{dtime} = 0;                # null deletion time
-
-                # XXX make 'checked' and 'valid' flags for type,
-                # charset, encoding
-
-                # if a charset is claimed to be utf8 or latin1 or
-                # something but only contains 7-bit characters,
-                # downgrade the charset to us-ascii (and lol no we are
-                # not going to support ebcdic)
-
-                #warn $p{type};
-
-                # generate string
-                my @x = map { $_ || '' } @p{qw(type language charset encoding)};
-                $rec .= pack('NNNCZ*Z*Z*Z*',
-                             $p{ctime}, $mtime, $p{dtime}, 0, @x);
-
-            }
-            else {
-                $rec = $state{$self->_primary}[0];
-            }
-
-            my $db = $self->_entries->{$k};
-            if ($db->db_put($state{$k}[0], $rec) == 0) {
-                #warn "put $k";
-            }
-            else {
-                Carp::croak($BerkeleyDB::Error);
-            }
-        }
-
-        if ($txn->txn_commit == 0) {
-            #warn 'lol';
-        }
-        else {
-            Carp::croak($BerkeleyDB::Error);
-        }
-
-        # here is where you return the object otherwise
-        return Store::Digest::Object->new(%p);
+        # overwrite the record
+        $rec = $self->_deflate($obj);
+        $db->db_put($bin, $rec);
     }
+
+    # Step 4: commit the changes
+
+    unless ($txn->txn_commit == 0) {
+        Carp::croak($BerkeleyDB::Error);
+    }
+
+    # Step 5: return the object
+
+    return $obj;
 }
 
+sub _best_uri {
+    my ($self, $obj) = @_;
+
+    # get the algorithm list from the object
+    my %algo = map { $_ => 1 } $obj->digest;
+
+    # see if the primary is present
+    my $pri = $self->_primary;
+    return $obj->digest($pri) if $algo{$pri};
+
+    # extract the first ni: URI that matches
+    my $d;
+    for my $a ($self->_algorithms) {
+        # this will attempt to match the primary algorithm a
+        # second time but fuggit
+        if ($algo{$a}) {
+            $d = $obj->digest($a);
+            last;
+        }
+    }
+    return $d;
+}
+
+sub _obj_to_digest {
+    my ($self, $obj) = @_;
+    # $digest has been sanitized to be either a ni: URI or a
+    # Store::Digest::Object.
+    return $obj if $obj->isa('URI::ni');
+    return $self->_best_uri($obj) if $obj->isa('Store::Digest::Object');
+}
 
 sub get {
-    my ($self, $digest, $algo) = @_;
-    my $pri = $self->_primary;
+    my $self   = shift;
+    my $digest = $self->_obj_to_digest(shift) or return;
+    # get raw data whatnot
+    my $algo = $digest->algorithm;
+    my $bin  = $digest->digest;
+    utf8::downgrade($bin); # JIC
 
-    # open a transaction to prevent stuff from changing mid-select
-    my $txn     = $self->_env->txn_begin;
+    # deal with database mumbo jumbo
+    my $pri     = $self->_primary;
     my $index   = $self->_entries->{$algo};
     my $primary = $algo eq $pri ? $index : $self->_entries->{$pri};
 
+    # open a transaction to prevent stuff from changing mid-select
+    my $txn     = $self->_env->txn_begin;
     $txn->Txn($index, $primary);
 
     my $cursor = $index->db_cursor;
 
-    utf8::downgrade($digest);
+    # the 'last' key is padded with 0xff up to the algo size
+    my $last = $bin . (pack('C', 255) x ($DIGESTS{$algo} - length $bin));
 
+    # pad the key too
+    $bin .= ("\0" x ($DIGESTS{$algo} - length $bin));
 
-    $digest .= ("\0" x ($DIGESTS{$algo} - length $digest));
-
-    warn unpack('H*', $digest);
+    #warn $algo;
+    #warn unpack('H*', $bin);
+    #warn unpack('H*', $last);
 
     my @obj;
     my $rec;
-    my $flag = DB_SET_RANGE | DB_GET_BOTH;
-    my $d    = $digest;
+    my $flag = DB_SET_RANGE | DB_NEXT | DB_GET_BOTH;
+    my $d    = $bin;
+
     while ($cursor->c_get($d, $rec, $flag) == 0) {
-        warn unpack('H*', $d);
+        #warn unpack('H*', $d);
         # set this flag right away
-        $flag = DB_NEXT | DB_GET_BOTH;
+        #$flag = DB_NEXT | DB_GET_BOTH;
+
+        # exit the loop if a key is lexically greater than 'last'
+        last if $d gt $last;
 
         my $k = $d;
-        # look up the full record
+
+        # create the 'next' key by turning it into a bigint,
+        # incrementing it, then turning it back into a string
+
+        my $hk = unpack('H*', $k);
+        #warn $hk;
+        my $bi = Math::BigInt->new("0x$hk") + 1;
+        #warn $bi->as_hex;
+        #$bi += 1;
+        #warn $bi->as_hex;
+
+        my $bh = substr($bi->as_hex, 2);
+        $bh = ('0' x ($DIGESTS{$algo}*2 - length $bh)) . $bh;
+        my $bb = pack 'H*', $bh;
+        #warn unpack('H*', $bb);
+
+        # look up the full record in case the requested algorithm is
+        # not the primary one.
         if ($algo ne $pri) {
             $k = $rec;
             $primary->db_get($k, $rec);
@@ -560,28 +609,81 @@ sub get {
 
         push @obj, $self->_inflate($k, $rec);
 
-        $d = $digest;
+        $d = $bb;
     }
 
     $txn->txn_commit;
 
-    warn scalar @obj;
+    #warn scalar @obj;
     #require Data::Dumper;
     #warn Data::Dumper::Dumper(\@obj);
 
+    # XXX this is no good
     wantarray ? @obj : \@obj;
 }
 
-# removes data
+# I want to be able to do partial matches for gets but not for purges.
+# There is no reasonable use case for mass deletions based on a
+# partial match on a cryptographic digest.
+
+# removes payload
 sub remove {
+    my $self   = shift;
+    my $digest = $self->_obj_to_digest(shift) or return;
+    # get raw data whatnot
+    my $algo = $digest->algorithm;
+    my $bin  = $digest->digest;
+    utf8::downgrade($bin);
+
+    my $txn = $self->_env->txn_begin;
+    $txn->Txn($self->_control, values %{$self->_entries});
+
+    my $pri = $self->_primary;
+    unless ($algo eq $pri) {
+        $self->_entries->{$algo}->db_get($bin, my $val);
+
+        # return if we can't find a match
+        unless ($val) {
+            $txn->txn_commit;
+            return;
+        }
+
+        $bin = $val;
+    }
+
+    $self->_entries->{$pri}->db_get($bin, my $rec);
+    unless ($rec) {
+        $txn->txn_commit;
+        return;
+    }
+
 }
 
 # also purges
 sub forget {
 }
 
+sub list {
+    my $self = shift;
+}
+
 # usage stats
 sub stats {
+    my $self = shift;
+
+    my $ctl = $self->_control;
+
+    my %x;
+    for my $k (qw(objects deleted bytes ctime mtime)) {
+        $ctl->db_get($k, my $val);
+        $x{$k} = $val;
+    }
+
+    # fix these
+    $x{created}  = DateTime->from_epoch(epoch => delete $x{ctime});
+    $x{modified} = DateTime->from_epoch(epoch => delete $x{mtime});
+
+    Store::Digest::Stats->new(%x);
 }
 
 # beginning to think i should index by ctime/mtime/dtime/type/encoding

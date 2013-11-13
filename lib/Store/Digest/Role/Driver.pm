@@ -11,7 +11,7 @@ use MooseX::Params::Validate ();
 
 use MooseX::Types::Moose qw(Str);
 use Store::Digest::Types qw(FiniteHandle DateTime RFC3066 DigestURI
-                            ContentType Token);
+                            ContentType Token StoreObject);
 
 use DateTime;
 
@@ -29,18 +29,31 @@ our $VERSION = '0.01';
 
 =head1 SYNOPSIS
 
-=head1 METHODS
+    package Store::Digest::Driver::Mine;
+
+    with 'Store::Digest::Role::Driver';
+
+    # do your thing
+
+=head1 DESCRIPTION
+
+This module does everything common to L<Store::Digest> drivers.
 
 =cut
 
 around add => sub {
     my $orig = shift;
 
+    # jimmy this to accept either an object or a filehandle as a sole
+    # argument
+    if ($_[1] and ref $_[1]) {
+    }
+
     my ($self, %p) = MooseX::Params::Validate::validated_hash(
         \@_,
         content  => {
             isa      => FiniteHandle,
-            optional => 0
+            optional => 0,
         },
         mtime    => {
             isa      => DateTime,
@@ -69,24 +82,40 @@ around add => sub {
     $self->$orig(%p);
 };
 
-around get => sub {
+# around get => sub {
+#     my $orig = shift;
+#     my ($self, $digest, $algo, $radix) =
+#         MooseX::Params::Validate::pos_validated_list(
+#             \@_,
+#             { is => Str|DigestURI },        # digest or ni: URI
+#             { is => Token, optional => 1 }, # optional algorithm
+#             { is => Token, optional => 1 }, # optional radix
+#         );
+
+#     unless (Scalar::Util::blessed($digest)) {
+#         $digest = URI::ni->from_digest($digest, $algo, undef, $radix);
+#     }
+
+#     #warn unpack("H*", $digest->digest);
+
+#     $self->$orig($digest->digest, $digest->algorithm);
+# };
+
+around [qw(get remove forget)] => sub {
     my $orig = shift;
     my ($self, $digest, $algo, $radix) =
         MooseX::Params::Validate::pos_validated_list(
             \@_,
-            { is => Str|DigestURI },        # digest or ni: URI
-            { is => Token, optional => 1 }, # optional algorithm
-            { is => Token, optional => 1 }, # optional radix
+            { is => Str|DigestURI|StoreObject }, # digest, object or ni: URI
+            { is => Token, optional => 1 },      # optional algorithm
+            { is => Token, optional => 1 },      # optional radix
         );
-
 
     unless (Scalar::Util::blessed($digest)) {
         $digest = URI::ni->from_digest($digest, $algo, undef, $radix);
     }
 
-    warn unpack("H*", $digest->digest);
-
-    $self->$orig($digest->digest, $digest->algorithm);
+    $self->$orig($digest);
 };
 
 =head1 AUTHOR

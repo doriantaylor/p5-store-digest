@@ -13,7 +13,7 @@ use MooseX::Types -declare => [qw(DateTime DigestURI Seekable
                                   FiniteHandle DigestHash
                                   NonNegativeInt ContentType RFC3066
                                   MaybeDateTime MaybeToken
-                                  Token File Directory)];
+                                  Token File Directory StoreObject)];
 
 use DateTime    ();
 use URI::ni     ();
@@ -39,6 +39,8 @@ our $VERSION = '0.01';
     use namespace::autoclean;
 
     use Store::Digest::Types;
+
+    # ... do your thing
 
 =head1 TYPES
 
@@ -123,6 +125,12 @@ implemented, I just care that it's at least zero.
 =cut
 
 subtype NonNegativeInt, as Int, where { $_ >= 0 };
+
+=head2 StoreObject
+
+=cut
+
+subtype StoreObject, as class_type('Store::Digest::Object');
 
 =head1 AUTHOR
 
