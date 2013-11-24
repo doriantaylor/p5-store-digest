@@ -312,11 +312,12 @@ sub _deflate {
                        grep { $_ ne $pri } $obj->digest);
 
     # get the rest of the object's contents
-    my @rec = map { $obj->$_ ? $obj->$_->epoch : 0 } qw(ctime mtime dtime);
+    my @rec = map {
+        $obj->$_ ? $obj->$_->epoch : 0 } qw(ctime mtime ptime dtime);
     push @rec, $obj->_flags;
     push @rec, map { $obj->$_ || '' } qw(type language charset encoding);
     # add them to the record
-    $rec .= pack('NNNCZ*Z*Z*Z*', @rec);
+    $rec .= pack('NNNNCZ*Z*Z*Z*', @rec);
 
     # optionally return the key
     return wantarray ? ($rec, $key) : $rec;
@@ -344,8 +345,8 @@ sub _inflate {
     }
 
     my %p;
-    @p{qw(ctime mtime dtime flags type language charset encoding)}
-        = unpack('NNNCZ*Z*Z*Z*', $record);
+    @p{qw(ctime mtime ptime dtime flags type language charset encoding)}
+        = unpack('NNNNCZ*Z*Z*Z*', $record);
 
     # delete the cruft
     for my $k (qw(dtime type language charset encoding)) {

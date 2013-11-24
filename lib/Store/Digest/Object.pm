@@ -59,6 +59,12 @@ will be C<undef>.
 
 =cut
 
+sub BUILD {
+    my $self = shift;
+    $self->mtime($self->ctime) unless $self->mtime;
+    $self->ptime($self->ctime) unless $self->ptime;
+}
+
 # has content => (
 #     is       => 'ro',
 #     required => 0,
@@ -209,8 +215,22 @@ L</ctime>.
 =cut
 
 has mtime => (
-    is       => 'ro',
+    is       => 'rw',
     isa      => MaybeDateTime,
+    required => 0,
+    coerce   => 1,
+);
+
+=head2 ptime
+
+Returns the timestamp of the time the I<metadata properties> of the
+object were last updated.
+
+=cut
+
+has ptime => (
+    is       => 'rw',
+    isa      => DateTime,
     required => 0,
     coerce   => 1,
 );
@@ -238,6 +258,8 @@ has _flags => (
 );
 
 =head2 type_checked
+
+This flag represents that the claimed content-type has been checked.
 
 =cut
 
@@ -287,6 +309,9 @@ sub encoding_valid {
 
 =head2 syntax_checked
 
+This flag represents an additional layer of syntax checking, e.g. XML
+validation.
+
 =cut
 
 sub syntax_checked {
@@ -312,6 +337,7 @@ sub as_string {
         size     => 'Size (Bytes)',
         ctime    => 'Added to Store',
         mtime    => 'Last Modified',
+        ptime    => 'Properties Modified',
         dtime    => 'Deleted',
         type     => 'Content Type',
         language => '(Natural) Language',
@@ -319,7 +345,7 @@ sub as_string {
         encoding => 'Content Encoding',
 
     );
-    my @mandatory = qw(size ctime mtime);
+    my @mandatory = qw(size ctime mtime ptime);
     my @optional  = qw(dtime type language charset encoding);
 
     my $out = sprintf "%s\n  Digests:\n", ref $self;
@@ -328,10 +354,10 @@ sub as_string {
         $out .= sprintf("    %s\n", $self->digest($d));
     }
 
-    for my $m (qw(size ctime mtime)) {
+    for my $m (@mandatory) {
         $out .= "  $labels{$m}: " . $self->$m . "\n";
     }
-    for my $o (qw(dtime type language charset encoding)) {
+    for my $o (@optional) {
         my $val = $self->$o;
         $out .= "  $labels{$o}: $val\n" if $val;
     }
