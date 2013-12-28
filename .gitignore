@@ -13,3 +13,5 @@ pod2htm*.tmp
 Store-Digest-*
 t/content/*
 nytprof.out
+inc/*
+{MY,}META.*

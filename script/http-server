@@ -26,10 +26,10 @@ my $app = sub {
     elsif ($method eq 'PUT') {
         # digest MUST match content
 
-        # Date request header 
+        # Date request header sets record mtime
     }
     elsif ($method eq 'DELETE') {
-        # must match exactly
+        # location must match exactly
     }
     elsif ($method eq 'GET' or $method eq 'HEAD') {
         # /.well-known/ni/{digest}/{whatever}
@@ -45,7 +45,7 @@ my $app = sub {
         # of objects (well, not this implementation, but still).
 
         # tempted to go by ctime, mtime and type; dtime as well for
-        # completeness
+        # completeness. deleted objects should not link.
 
         # problem with going by time is we'd have to aggregate by day
         # and there are these pesky things called time zones, which to
@@ -67,8 +67,8 @@ my $app = sub {
         # dtime will only be set and cleared.
 
         # also it will be hella useful to get a list of objects that
-        # have a broken type/charset/content-encoding, so we can
-        # either do something about them or nuke them.
+        # have a broken type/charset/content-encoding/syntax, so we
+        # can either do something about them or nuke them.
 
         # /.well-known/ni/{digest}/{whatever} should return a list in
         # case of a partial match, 300 Multiple Choices.
@@ -87,12 +87,17 @@ my $app = sub {
 
         # otherwise just return the object, or headers if HEAD.
 
+        # unless Accept: for the type is 0, then 406, or if the object
+        # is deleted, then 410
+
+        # what about ;meta gender bender to propfind? out of scope?
+
         # ugh this looks like it's going to be a lot of work.
     }
     elsif ($method eq 'PROPFIND') {
         # show metadata
 
-        # Accept: either RDF or DAV XML; prefer DAV XML
+        # Accept: either RDF/whatever or DAV XML; prefer DAV XML
     }
     elsif ($method eq 'PROPPATCH') {
         # update metadata: flags, type, encoding and mtime, but the
