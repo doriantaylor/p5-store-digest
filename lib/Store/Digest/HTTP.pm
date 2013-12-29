@@ -19,12 +19,6 @@ Version 0.01
 
 our $VERSION = '0.01';
 
-has store => (
-    is       => 'ro',
-    isa      => 'Store::Digest',
-    required => 1,
-);
-
 =head1 SYNOPSIS
 
     use Store::Digest::HTTP;
@@ -292,6 +286,11 @@ C<multipart/form-data> C<POST> target.
 $DISPATCH{meta}{GET} = sub {
 };
 
+# the content-type of these GET handlers must be overrideable by query
+# parameter, no?
+
+# sure, 
+
 =head2 Partial matches
 
 Partial matches are read-only resources that return a list of links to
@@ -506,7 +505,8 @@ $DISPATCH{stats} = {};
 
 =head3 C<GET>/C<HEAD>
 
-Depending on the C<Accept> header, this handler returns a simple web page
+Depending on the C<Accept> header, this handler returns a simple web
+page or set of RDF triples.
 
 =cut
 
@@ -525,10 +525,10 @@ $DISPATCH{stats}{PROPFIND} = sub {
 =head2 C<POST> target, raw
 
 This is a URI that only handles POST requests, which enable a thin
-(e.g., API) HTTP client to upload a data object without having to
-waste effort computing its digest. Headers of interest to the request
-are naturally C<Content-Type>, and C<Date>. The path of this URI is
-set in the constructor, and defaults to:
+(e.g., API) HTTP client to upload a data object without the effort or
+apparatus needed to compute its digest. Headers of interest to the
+request are naturally C<Content-Type>, and C<Date>. The path of this
+URI is set in the constructor, and defaults to:
 
     /0c17e171-8cb1-4c60-9c58-f218075ae9a9
 
@@ -576,6 +576,10 @@ C<Date>
 $DISPATCH{raw}{POST} = sub {
 };
 
+# in the case of POST, we have a special location for
+# multipart/form-data but otherwise take raw input directly to the
+# POST location
+
 =head2 C<POST> target, multipart/form-data
 
 This resource behaves identically to the one above, except that takes
@@ -613,17 +617,94 @@ $DISPATCH{form}{POST} = sub {
 
 =head2 new
 
+    my $sdh = Store::Digest::HTTP->new(store => $store);
+
 =over 4
 
 =item store
 
-=item other stuff
+This is a reference to a L<Store::Digest> object.
+
+=cut
+
+has store => (
+    is       => 'ro',
+    isa      => 'Store::Digest',
+    required => 1,
+);
+
+=item base
+
+This is the base URI path, which defaults to C</.well-known/ni/>.
+
+=cut
+
+has base => (
+    is       => 'ro',
+    isa      => 'Str',
+    required => 0,
+    lazy     => 1,
+    default  => '/.well-known/ni/',
+);
+
+=item post_raw
+
+This overrides the location of the raw C<POST> target, which defaults
+to C</0c17e171-8cb1-4c60-9c58-f218075ae9a9>.
+
+=cut
+
+# XXX include some mechanism so this module can register the UUID URIs
+
+has post_raw => (
+    is       => 'ro',
+    isa      => 'Str',
+    required => 0,
+    lazy     => 1,
+    default  => '/0c17e171-8cb1-4c60-9c58-f218075ae9a9',
+);
+
+=item post_form
+
+This overrides the location of the form-interpreted C<POST> target,
+which defaults to C</12d851b7-5f71-405c-bb44-bd97b318093a>.
+
+=cut
+
+has post_form => (
+    is       => 'ro',
+    isa      => 'Str',
+    required => 0,
+    lazy     => 1,
+    default  => '/12d851b7-5f71-405c-bb44-bd97b318093a',
+);
+
+
+=item param_map
+
+Any of the URI query parameters used in this module can be remapped to
+different literals using a HASH reference like so:
+
+    # in case 'mtime' collides with some other parameter elsewhere
+    { modified => 'mtime' }
 
 =back
 
+=cut
+
+has param_map => (
+    is       => 'ro',
+    isa      => 'HashRef',
+    required => 0,
+    lazy     => 1,
+    default  => sub { { } },
+);
+
 =head2 respond
 
-yar
+    my $response = $sdh->respond($request);
+
+
 
 =cut
 
@@ -654,17 +735,16 @@ sub respond {
 
     # otherwise return the handler's response
 
-    # requests to the indexes should be sortable/paginated by query
-    # string
-
-    # content-type must be overrideable by query parameter
-
-    # in the case of POST, we have a special location for
-    # multipart/form-data but otherwise take raw input directly to the
-    # POST location
 
     # we should return a Plack::Response. maybe?
 }
+
+=head1 TO DO
+
+I think diff coding/instance manipulation (L<RFC
+3229|http://tools.ietf.org/html/rfc3229> and L<RFC
+3284|http://tools.ietf.org/html/rfc3284>) would be pretty cool. Might
+be better handled by some other module,
 
 =head1 AUTHOR
 
