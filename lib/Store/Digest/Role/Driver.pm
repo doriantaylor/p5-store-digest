@@ -111,6 +111,7 @@ around [qw(get remove forget)] => sub {
             { is => Token, optional => 1 },      # optional radix
         );
 
+    # XXX: this can be blessed as a URI::ni and still messed up
     unless (Scalar::Util::blessed($digest)) {
         $digest = URI::ni->from_digest($digest, $algo, undef, $radix);
     }

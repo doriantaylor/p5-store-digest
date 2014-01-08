@@ -7,6 +7,25 @@ use warnings FATAL => 'all';
 use Moose;
 use namespace::autoclean;
 
+use Plack::Request;
+use Plack::Response;
+use URI::QueryParam;
+use HTTP::Negotiate;
+use DateTime::Format::HTTP;
+
+use Scalar::Util ();
+use utf8;
+
+# XXX put this in a role or something
+my %DIGESTS = (
+    'md5'        => 16,
+#    'ripemd-160' => 20,
+    'sha-1'      => 20,
+    'sha-256'    => 32,
+    'sha-384'    => 48,
+    'sha-512'    => 64,
+);
+
 =head1 NAME
 
 Store::Digest::HTTP - Map HTTP methods and URI space to Store::Digest
@@ -157,6 +176,58 @@ requests will be met with a C<501 Not Implemented> error.
 =cut
 
 $DISPATCH{object}{GET} = sub {
+    # we need the algo and the digest and the header set
+    my ($self, $header, $query) = @_;
+    # put the algo/digest into the query component
+
+    my @obj = $self->store->get(@{$query}{qw(digest algorithm)});
+
+    # ain't nothin' hurr
+    return [404, [], []] if @obj == 0;
+
+    # partial match
+    if (@obj > 1) {
+        return [501, [], []];
+    }
+
+    # exactly one object
+    my $obj = $obj[0];
+    my $lm  = $obj->mtime || $obj->ctime;
+    my $pri = $self->store->_primary;
+    my $ni  = $obj->digest($pri);
+
+    # baleeted
+    return [410, [], []] if ($obj->dtime);
+
+    # check etag
+    if (my $inm = $header->header('If-None-Match')) {
+        # XXX what happens if this is malformed?
+        $inm =~ tr/"//d;
+        $inm = URI->new($inm);
+        if ($inm->isa('URI::ni')) {
+            my $match = $obj->digest($inm->algorithm);
+            return [304, [], []] if $inm->eq($match);
+        }
+        warn "INM: $inm";
+    }
+
+    # check if-modified-since
+    if (my $ims = $header->header('If-Modified-Since')) {
+        # XXX what happens if this is malformed?
+        $ims = DateTime::Format::HTTP->parse_datetime($ims);
+        return [304, [], []] if $lm <= $ims;
+        warn "IMS: $ims";
+    }
+
+    my $cl = sprintf '/.well-known/ni/%s/%s', $ni->algorithm, $ni->b64digest;
+
+    # return plack arrayref?
+    [200, ['Content-Length'   => $obj->size,
+           'Content-Type'     => $obj->type,
+           'Last-Modified'    => DateTime::Format::HTTP->format_datetime($lm),
+           'ETag'             => qq{"$ni"},
+           'Content-Location' => $cl,
+       ], $obj->content];
 };
 
 =head3 C<PUT>
@@ -182,6 +253,8 @@ header in subsequent requests.
 =cut
 
 $DISPATCH{object}{PUT} = sub {
+
+    # we need the algo, the digest, the header set, and the request body
 };
 
 =head3 C<DELETE>
@@ -197,6 +270,8 @@ at that location.
 =cut
 
 $DISPATCH{object}{DELETE} = sub {
+
+    # we need the algo, and the digest, and that's it.
 };
 
 =head3 C<PROPFIND>
@@ -210,6 +285,9 @@ WebDAV.
 =cut
 
 $DISPATCH{object}{PROPFIND} = sub {
+    # we need the algo, digest, header set
+
+    # *and* we need the dav request body
 };
 
 =head3 C<PROPPATCH>
@@ -257,6 +335,7 @@ these values match their contents.
 =cut
 
 $DISPATCH{object}{PROPPATCH} = sub {
+    # we need algo, digest, header set, request body
 };
 
 =head2 Individual metadata
@@ -284,12 +363,13 @@ C<multipart/form-data> C<POST> target.
 =cut
 
 $DISPATCH{meta}{GET} = sub {
+    # we need algo, digest, header set
 };
 
 # the content-type of these GET handlers must be overrideable by query
 # parameter, no?
 
-# sure, 
+# sure,
 
 =head2 Partial matches
 
@@ -327,6 +407,7 @@ RDFa, RDF/XML, N3/Turtle, and JSON-LD variants.
 =cut
 
 $DISPATCH{partial}{GET} = sub {
+    # we need (maybe) algo, non-zero partial digest, header set
 };
 
 =head3 C<PROPFIND>
@@ -337,6 +418,11 @@ will almost certainly be contingent on whatever vocab I decide on.
 =cut
 
 $DISPATCH{partial}{PROPFIND} = sub {
+    # we need (maybe) algo, non-zero partial digest, header set
+
+    # *and* we need the dav request body
+
+    # another way to handle this is to compile the digests beforehand
 };
 
 =head2 Resource collections
@@ -478,6 +564,8 @@ traces of deleted objects will be shown.
 =cut
 
 $DISPATCH{collection}{GET} = sub {
+    # we need the algo, the header set, and all those other params
+
 };
 
 =head3 C<PROPFIND>
@@ -488,6 +576,11 @@ this time.
 =cut
 
 $DISPATCH{collection}{PROPFIND} = sub {
+    # we need the algo, the header set, and (maybe) all those other params
+
+    # *and* we need the dav request body
+
+    # are you ready for n-million-plus element xml documents?
 };
 
 =head2 Summary and usage statistics
@@ -511,6 +604,15 @@ page or set of RDF triples.
 =cut
 
 $DISPATCH{stats}{GET} = sub {
+    my $self = shift;
+    # we just need the header set for conneg.
+
+    my $stats = $self->store->stats->as_string;
+    utf8::downgrade($stats);
+    my $len = length $stats;
+
+    return [200, ['Content-Type'   => 'text/plain',
+                  'Content-Length' => $len], [$stats]];
 };
 
 =head3 C<PROPFIND>
@@ -520,6 +622,9 @@ B<TODO>: Define RDF vocab before PROPFIND.
 =cut
 
 $DISPATCH{stats}{PROPFIND} = sub {
+    # we just need the header set for conneg.
+
+    # *and* we need the dav request body
 };
 
 =head2 C<POST> target, raw
@@ -542,11 +647,13 @@ This response accepts the request content and attempts to store it. If
 unsuccessful, it will return either C<507 Insufficient Storage> or
 C<500 Internal Server Error>. If successful, the response will
 redirect via C<303 See Other> to the appropriate L</Individual
-metadata> resource. Note that the request body will be stored
-I<as-is>, that is, I<not> interpreted like the contents of a web
-form. C<multipart/form-data> request bodies will be stored literally
-as such. Interpreting such request bodies is the role of next and
-final resource in this list.
+metadata> resource.
+
+This resource is intended to be used in a pipeline with other web
+service code. C<POST>ed request entities to this location will be
+inserted into the store I<as-is>. B<Do not> C<POST> to this location
+from a Web form unless that's what you want to have happen. Use the
+other target instead.
 
 The contents of the following request headers are stored along with
 the content of the request body:
@@ -629,7 +736,7 @@ This is a reference to a L<Store::Digest> object.
 
 has store => (
     is       => 'ro',
-    isa      => 'Store::Digest',
+    isa      => 'Store::Digest::Driver',
     required => 1,
 );
 
@@ -641,10 +748,10 @@ This is the base URI path, which defaults to C</.well-known/ni/>.
 
 has base => (
     is       => 'ro',
-    isa      => 'Str',
+    isa      => 'RegexpRef',
     required => 0,
     lazy     => 1,
-    default  => '/.well-known/ni/',
+    default  => sub { qr!/\.well-known/[dn]i/+! },
 );
 
 =item post_raw
@@ -661,13 +768,15 @@ has post_raw => (
     isa      => 'Str',
     required => 0,
     lazy     => 1,
-    default  => '/0c17e171-8cb1-4c60-9c58-f218075ae9a9',
+    default  => '0c17e171-8cb1-4c60-9c58-f218075ae9a9',
 );
 
 =item post_form
 
 This overrides the location of the form-interpreted C<POST> target,
 which defaults to C</12d851b7-5f71-405c-bb44-bd97b318093a>.
+
+If the 
 
 =cut
 
@@ -676,7 +785,7 @@ has post_form => (
     isa      => 'Str',
     required => 0,
     lazy     => 1,
-    default  => '/12d851b7-5f71-405c-bb44-bd97b318093a',
+    default  => '12d851b7-5f71-405c-bb44-bd97b318093a',
 );
 
 
@@ -704,39 +813,175 @@ has param_map => (
 
     my $response = $sdh->respond($request);
 
-
-
 =cut
 
+# ok this thing should be able to handle a HTTP::Request,
+# Plack::Request, Catalyst::Request, and Apache2::RequestRec
+
+# we only care about the method, request-uri, headers for just
+# about everything except POST and PUT (and PROPFIND/PROPPATCH).
+
+# We should normalize all body input to an IO handle or duck type
+# in the case of apache
+
 sub respond {
-    # ok this thing should be able to handle a HTTP::Request,
-    # Plack::Request, Catalyst::Request, and Apache2::RequestRec
-
-    # we only care about the method, request-uri, headers for just
-    # about everything except POST and PUT (and PROPFIND/PROPPATCH).
-
-    # We should normalize all body input to an IO handle or duck type
-    # in the case of apache
+    my ($self, $req) = @_;
+    $req = Plack::Request->new($req) unless Scalar::Util::blessed($req);
+    # we'll start by doing this for Plack, and then we'll fill in the
+    # other HTTP drivers.
 
     # now that that's sorted out, here's the resolver:
 
-    # first we check for exact matches to uploader URI paths
+    my $header = $req->headers;
+    my $body   = $req->content;
+    my $uri    = $req->uri;
+    my $path   = $uri->path;
+    my $query  = $uri->query_form_hash;
+    my $base   = $self->base;
 
-    # then we should clip off the prefix(es)
+    # first we should clip off the prefix(es)
 
-    # if we don't positively identify a resource type, return 404
+    $path =~ s!^$base!!;
+    $path =~ s!^/*!!;
 
-    # if the resource type does not have a handler for the request
-    # method, return 405
+    #warn $path;
 
-    # otherwise eval the handler
+    my @segments = split m!/+!, $path, -1;
 
-    # if the handler raises, return 500
+    #warn join('/', @segments);
+
+    # here's the all-important resource type
+    my $type;
+
+    if (@segments == 0) {
+        # root
+        $type = 'stats';
+    }
+    else {
+        my @algorithms = @{$self->store->_algorithms || []};
+        if (grep { $_ eq $segments[0] } @algorithms) {
+            # we know this is now an algorithm
+            my $algo = $query->{algorithm} = $segments[0];
+
+            if (defined $segments[1]) {
+                if ($segments[1] ne '') {
+                    unless ($segments[1] =~ /^[0-9A-Za-z_-]+$/) {
+                        # no matcho
+                        return [404, [], []];
+                    }
+                    my $b64len = sprintf '%.0f', $DIGESTS{$algo} * 4/3;
+                    my $hexlen = $DIGESTS{$algo} * 2;
+                    my $seglen = length $segments[1];
+                    # could be partial, could be full
+                    if ($seglen == $b64len) {
+                        $type = 'object';
+                    }
+                    elsif ($seglen =~ /^[0-9A-Fa-f]{$hexlen}$/) {
+                        $type = 'object';
+                        $query->{radix} = 16;
+                    }
+                    else {
+                        $type = 'partial';
+                    }
+
+                    $query->{digest} = $segments[1];
+                }
+                else {
+                    # definitely a collection
+                    $type = 'collection';
+                }
+            }
+            else {
+                # this is a collection; redirect 307 with trailing /
+
+                # the base was a regex so we want to retrieve what was
+                # actually matched by subtracting the altered path
+                # from the original path.
+                my $fullpath = $uri->path;
+
+                # pretty sure these are already done but whatev
+                utf8::downgrade($fullpath);
+                utf8::downgrade($path);
+
+                # aaand the surgery:
+                my $pdiff = substr($fullpath, 0, - length $path);
+                warn $pdiff;
+                my $clone = $uri->clone;
+                my $new = ($pdiff =~ m!/$!) ? "$pdiff$algo/" : "$pdiff/$algo/";
+                $clone->path($new);
+
+                return [307, [Location => $clone], []];
+            }
+        }
+        elsif ($segments[0] eq $self->post_raw) {
+            $type = 'raw';
+        }
+        elsif ($segments[0] eq $self->post_form) {
+            $type = 'form';
+        }
+        else {
+            # definitely partial
+            unless ($segments[1] =~ /^[0-9A-Za-z_-]+$/) {
+                # no matcho
+                return [404, [], []];
+            }
+            $type = 'partial';
+            $query->{digest} = $segments[1];
+        }
+    }
+
+    # find the correct resource type
+    if (my $dispatch = $DISPATCH{$type || ''}) {
+
+        # now check request method
+        my $meth = $req->method;
+        my $test = $meth eq 'HEAD' ? 'GET' : $meth;
+        if (my $sub = $dispatch->{$test}) {
+            # eval the handler
+            my $ret = eval { $sub->($self, $header, $query, $body) };
+
+            # if the handler raises, return 500
+            if ($@) {
+                return [500, [], [$@]];
+            }
+
+            # the code hasn't been written yet, lulz
+            unless ($ret && ref $ret eq 'ARRAY') {
+                return [501, [], []];
+            }
+
+            if ($meth eq 'HEAD') {
+                warn 'lol';
+                $ret->[2] = [];
+            }
+
+            # that's all folks
+            return $ret;
+        }
+        else {
+            # if the resource type does not have a handler for the
+            # request method, return 405
+            return [405, [], []];
+        }
+    }
+    else {
+        # if we don't positively identify a resource type, return 404
+        return [404, [], []];
+    }
+
+    # then we check for exact matches to uploader URI paths
+
+    # first segment match 
+
+
+
+
 
     # otherwise return the handler's response
 
 
     # we should return a Plack::Response. maybe?
+    Plack::Response->new(200);
 }
 
 =head1 TO DO
