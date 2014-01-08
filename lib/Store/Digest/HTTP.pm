@@ -13,6 +13,9 @@ use URI::QueryParam;
 use HTTP::Negotiate;
 use DateTime::Format::HTTP;
 
+use XML::LibXML::LazyBuilder qw(DOM F E P);
+
+use POSIX ();
 use Scalar::Util ();
 use utf8;
 
@@ -182,11 +185,14 @@ $DISPATCH{object}{GET} = sub {
 
     my @obj = $self->store->get(@{$query}{qw(digest algorithm)});
 
+    #warn scalar @obj;
+
     # ain't nothin' hurr
     return [404, [], []] if @obj == 0;
 
     # partial match
     if (@obj > 1) {
+        warn scalar @obj;
         return [501, [], []];
     }
 
@@ -219,7 +225,8 @@ $DISPATCH{object}{GET} = sub {
         warn "IMS: $ims";
     }
 
-    my $cl = sprintf '/.well-known/ni/%s/%s', $ni->algorithm, $ni->b64digest;
+    my $cl = sprintf
+        '/.well-known/ni/%s/%s', $ni->algorithm, $ni->b64digest(1);
 
     # return plack arrayref?
     [200, ['Content-Length'   => $obj->size,
@@ -564,8 +571,28 @@ traces of deleted objects will be shown.
 =cut
 
 $DISPATCH{collection}{GET} = sub {
+    my ($self, $header, $query) = @_;
     # we need the algo, the header set, and all those other params
 
+    my @obj = $self->store->get('', $self->store->_primary);
+
+    my @lol;
+    for my $obj (@obj) {
+        my $ni  = $obj->digest($query->{algorithm});
+        my $hex = $ni->hexdigest;
+        push @lol, E li => {},
+            (E a => { href => $ni->b64digest(1) }, $hex), ' ',
+                (E span => {}, $obj->size), ' ',
+                    (E span => {}, sprintf('%s', $obj->mtime||$obj->ctime));
+    }
+
+    my $doc = DOM (E html => { xmlns => 'http://www.w3.org/1999/xhtml' },
+                   (E head => {}, (E title => {}, 'lol')),
+                   (E body => {},
+                    (E ul => {}, @lol)));
+    my $foo = $doc->toString(1);
+
+    [200, ['Content-Type' => 'application/xhtml+xml'], [$foo]];
 };
 
 =head3 C<PROPFIND>
@@ -869,9 +896,10 @@ sub respond {
                         # no matcho
                         return [404, [], []];
                     }
-                    my $b64len = sprintf '%.0f', $DIGESTS{$algo} * 4/3;
+                    my $b64len = POSIX::ceil($DIGESTS{$algo} * 4/3);
                     my $hexlen = $DIGESTS{$algo} * 2;
                     my $seglen = length $segments[1];
+                    #warn "$seglen $b64len";
                     # could be partial, could be full
                     if ($seglen == $b64len) {
                         $type = 'object';
@@ -937,6 +965,7 @@ sub respond {
         my $meth = $req->method;
         my $test = $meth eq 'HEAD' ? 'GET' : $meth;
         if (my $sub = $dispatch->{$test}) {
+            #warn "$type $test";
             # eval the handler
             my $ret = eval { $sub->($self, $header, $query, $body) };
 
