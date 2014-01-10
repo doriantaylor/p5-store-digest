@@ -419,11 +419,7 @@ sub add {
     # Convert these into digests now
     $p{digests} ||= {};
     for my $k (keys %state) {
-        # XXX there is some interaction going on here that is making
-        # the digests come out wrong.
-        my $digest = $state{$k}->clone->digest;
-        #warn unpack 'h*', $digest;
-        $p{digests}{$k} = URI::ni->from_digest($digest, $k, undef, 256);
+        $p{digests}{$k} = URI::ni->from_digest($state{$k}, $k);
     }
 
     # Step 2: move the file into position unless there is already a copy
