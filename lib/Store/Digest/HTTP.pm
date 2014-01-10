@@ -178,6 +178,8 @@ requests will be met with a C<501 Not Implemented> error.
 
 =cut
 
+# one pattern here is moving the path into the query
+
 $DISPATCH{object}{GET} = sub {
     # we need the algo and the digest and the header set
     my ($self, $header, $query) = @_;
@@ -203,7 +205,7 @@ $DISPATCH{object}{GET} = sub {
     my $ni  = $obj->digest($pri);
 
     # baleeted
-    return [410, [], []] if ($obj->dtime);
+    return [410, [], []] if $obj->dtime;
 
     # check etag
     if (my $inm = $header->header('If-None-Match')) {
@@ -211,10 +213,11 @@ $DISPATCH{object}{GET} = sub {
         $inm =~ tr/"//d;
         $inm = URI->new($inm);
         if ($inm->isa('URI::ni')) {
+            # get the right digest for the algorithm given in the etag
             my $match = $obj->digest($inm->algorithm);
             return [304, [], []] if $inm->eq($match);
         }
-        warn "INM: $inm";
+        #warn "INM: $inm";
     }
 
     # check if-modified-since
@@ -222,7 +225,7 @@ $DISPATCH{object}{GET} = sub {
         # XXX what happens if this is malformed?
         $ims = DateTime::Format::HTTP->parse_datetime($ims);
         return [304, [], []] if $lm <= $ims;
-        warn "IMS: $ims";
+        #warn "IMS: $ims";
     }
 
     my $cl = sprintf
@@ -415,6 +418,7 @@ RDFa, RDF/XML, N3/Turtle, and JSON-LD variants.
 
 $DISPATCH{partial}{GET} = sub {
     # we need (maybe) algo, non-zero partial digest, header set
+    my ($self, $
 };
 
 =head3 C<PROPFIND>
@@ -1023,12 +1027,12 @@ sub respond {
         }
         else {
             # definitely partial
-            unless ($segments[1] =~ /^[0-9A-Za-z_-]+$/) {
+            unless ($segments[0] =~ /^[0-9A-Za-z_-]+$/) {
                 # no matcho
                 return [404, [], []];
             }
             $type = 'partial';
-            $query->{digest} = $segments[1];
+            $query->{digest} = $segments[0];
         }
     }
 

@@ -621,7 +621,6 @@ sub get {
         # look up the full record in case the requested algorithm is
         # not the primary one.
         if ($algo ne $pri) {
-            warn 'here';
             $k = $rec;
             $primary->db_get($k, $rec);
         }
