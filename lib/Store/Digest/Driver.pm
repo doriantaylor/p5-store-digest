@@ -7,7 +7,8 @@ use warnings FATAL => 'all';
 use Moose;
 use namespace::autoclean;
 
-use Store::Digest::Types qw(FiniteHandle DateTime RFC3066 ContentType Token);
+use Store::Digest::Types
+    qw(FiniteHandle DateTimeType RFC3066 ContentType Token);
 
 use DateTime;
 

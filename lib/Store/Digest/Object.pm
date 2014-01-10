@@ -12,7 +12,7 @@ use namespace::autoclean;
 use MooseX::Types::Moose qw(Maybe Int CodeRef);
 
 use Store::Digest::Types qw(FiniteHandle DigestHash NonNegativeInt
-                            ContentType Token DateTime MaybeDateTime
+                            ContentType Token DateTimeType MaybeDateTime
                             MaybeToken);
 
 # flags
@@ -201,7 +201,7 @@ the store, from the point of view of the system.
 
 has ctime => (
     is       => 'ro',
-    isa      => DateTime,
+    isa      => DateTimeType,
     required => 1,
     coerce   => 1,
 );
@@ -230,7 +230,7 @@ object were last updated.
 
 has ptime => (
     is       => 'rw',
-    isa      => DateTime,
+    isa      => DateTimeType,
     required => 0,
     coerce   => 1,
 );

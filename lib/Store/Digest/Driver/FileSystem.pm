@@ -12,7 +12,7 @@ extends 'Store::Digest::Driver';
 with    'Store::Digest::Role::Driver';
 
 use MooseX::Types::Moose qw(HashRef ArrayRef);
-use Store::Digest::Types qw(Directory DateTime Token);
+use Store::Digest::Types qw(Directory DateTimeType Token);
 
 use Store::Digest::Object;
 use Store::Digest::Stats;
@@ -204,7 +204,9 @@ sub BUILD {
                   ("Driver initialization failed: $a is not a valid algorithm")
                       unless defined $DIGESTS{$a};
         }
-        my $v = join ',', sort map { lc $_ } @$w;
+        # XXX DO NOT FORGET TO SORT THIS
+        $w = [sort map { lc $_ } @$w];
+        my $v = join ',', @$w;
 
         $self->_algorithms($w);
         $control->db_put(algorithms => $v);
@@ -283,6 +285,14 @@ sub BUILD {
     #$self->_entries($entries);
 }
 
+sub DEMOLISH {
+    my $self = shift;
+    for my $db (values %{$self->_entries}) {
+        $db->db_close;
+    }
+    $self->_control->db_close;
+}
+
 =head2 add
 
 =cut
@@ -337,6 +347,7 @@ sub _inflate {
     my %rec = ($pri => URI::ni->from_digest($digest, $pri, undef, 256));
 
     for my $algo (grep { $_ ne $pri } @{$self->_algorithms}) {
+        #warn $algo;
         my $b = substr $record, 0, $DIGESTS{$algo};
         $rec{$algo} = URI::ni->from_digest($b, $algo, undef, 256);
 
@@ -390,9 +401,12 @@ sub add {
 
     # XXX make block size tunable?
     while ($content->read(my $buf, BUFSIZE)) {
+        utf8::downgrade($buf);
         # as the block is read, pass it into each digest algorithm.
         for my $k (keys %state) {
+            #warn sprintf '%s %d', $k, length $buf;
             $state{$k}->add($buf);
+            #warn $state{$k}->clone->hexdigest if $k eq 'md5';
         }
         # and write it back out to the tempfile
         $tempfh->syswrite($buf);
@@ -405,7 +419,11 @@ sub add {
     # Convert these into digests now
     $p{digests} ||= {};
     for my $k (keys %state) {
-        $p{digests}{$k} = URI::ni->from_digest($state{$k}, $k);
+        # XXX there is some interaction going on here that is making
+        # the digests come out wrong.
+        my $digest = $state{$k}->clone->digest;
+        #warn unpack 'h*', $digest;
+        $p{digests}{$k} = URI::ni->from_digest($digest, $k, undef, 256);
     }
 
     # Step 2: move the file into position unless there is already a copy
@@ -457,6 +475,7 @@ sub add {
             # overwrite the record
             $rec = $self->_deflate($obj);
             $db->db_put($bin, $rec);
+            #$db->db_sync;
         }
     }
     else {
@@ -467,6 +486,7 @@ sub add {
             utf8::downgrade($k); # dat utf8
 
             $e->{$algo}->db_put($k, $bin);
+            #$e->{$algo}->db_sync;
         }
 
         # tie up loose ends re the file
@@ -498,6 +518,7 @@ sub add {
         # overwrite the record
         $rec = $self->_deflate($obj);
         $db->db_put($bin, $rec);
+        #$db->db_sync;
     }
 
     # Step 4: commit the changes
@@ -604,6 +625,7 @@ sub get {
         # look up the full record in case the requested algorithm is
         # not the primary one.
         if ($algo ne $pri) {
+            warn 'here';
             $k = $rec;
             $primary->db_get($k, $rec);
         }

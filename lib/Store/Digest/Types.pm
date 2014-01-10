@@ -9,7 +9,7 @@ use namespace::autoclean;
 
 use MooseX::Types::Moose qw(Maybe Str Int FileHandle HashRef);
 
-use MooseX::Types -declare => [qw(DateTime DigestURI Seekable
+use MooseX::Types -declare => [qw(DateTimeType DigestURI Seekable
                                   FiniteHandle DigestHash
                                   NonNegativeInt ContentType RFC3066
                                   MaybeDateTime MaybeToken
@@ -44,14 +44,14 @@ our $VERSION = '0.01';
 
 =head1 TYPES
 
-=head2 DateTime
+=head2 DateTimeType
 
 =cut
 
-subtype DateTime, as class_type('DateTime');
-coerce DateTime,  from Int, via { DateTime->from_epoch(epoch => shift) };
+subtype DateTimeType, as class_type('DateTime');
+coerce DateTimeType,  from Int, via { DateTime->from_epoch(epoch => shift) };
 
-subtype MaybeDateTime, as Maybe[DateTime];
+subtype MaybeDateTime, as Maybe[DateTimeType];
 
 coerce MaybeDateTime, from Maybe[Int],
     via { $_[0] ? DateTime->from_epoch(epoch => $_[0]) : undef };

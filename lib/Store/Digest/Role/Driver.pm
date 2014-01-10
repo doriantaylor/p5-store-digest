@@ -10,7 +10,7 @@ use namespace::autoclean;
 use MooseX::Params::Validate ();
 
 use MooseX::Types::Moose qw(Str);
-use Store::Digest::Types qw(FiniteHandle DateTime RFC3066 DigestURI
+use Store::Digest::Types qw(FiniteHandle DateTimeType RFC3066 DigestURI
                             ContentType Token StoreObject);
 
 use DateTime;
@@ -56,10 +56,10 @@ around add => sub {
             optional => 0,
         },
         mtime    => {
-            isa      => DateTime,
+            isa      => DateTimeType,
             optional => 1,
             coerce   => 1,
-            default  => sub { DateTime->now },
+            default  => DateTime->now,
         },
         type     => {
             isa      => ContentType,
@@ -114,6 +114,7 @@ around [qw(get remove forget)] => sub {
     # XXX: this can be blessed as a URI::ni and still messed up
     unless (Scalar::Util::blessed($digest)) {
         $digest = URI::ni->from_digest($digest, $algo, undef, $radix);
+        #warn $digest;
     }
 
     $self->$orig($digest);

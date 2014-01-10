@@ -7,7 +7,7 @@ use warnings FATAL => 'all';
 use Moose;
 use namespace::autoclean;
 
-use Store::Digest::Types qw(DateTime NonNegativeInt);
+use Store::Digest::Types qw(DateTimeType NonNegativeInt);
 
 =head1 NAME
 
@@ -71,7 +71,7 @@ Returns the L<DateTime> the database was created.
 
 has created => (
     is => 'ro',
-    isa => DateTime,
+    isa => DateTimeType,
 );
 
 =head2 modified
@@ -82,7 +82,7 @@ Returns the L<DateTime> the database was last modified.
 
 has modified => (
     is  => 'ro',
-    isa => DateTime,
+    isa => DateTimeType,
 );
 
 =head2 as_string

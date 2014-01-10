@@ -574,14 +574,18 @@ $DISPATCH{collection}{GET} = sub {
     my ($self, $header, $query) = @_;
     # we need the algo, the header set, and all those other params
 
-    my @obj = $self->store->get('', $self->store->_primary);
+    #my @obj = $self->store->get('', $self->store->_primary);
+    my @obj = $self->store->get('', $query->{algorithm});
 
     my @lol;
     for my $obj (@obj) {
+        #warn $obj->as_string;
         my $ni  = $obj->digest($query->{algorithm});
+        #warn $ni;
         my $hex = $ni->hexdigest;
         push @lol, E li => {},
             (E a => { href => $ni->b64digest(1) }, $hex), ' ',
+                (E span => {}, $obj->type), ' ',
                 (E span => {}, $obj->size), ' ',
                     (E span => {}, sprintf('%s', $obj->mtime||$obj->ctime));
     }
@@ -592,7 +596,9 @@ $DISPATCH{collection}{GET} = sub {
                     (E ul => {}, @lol)));
     my $foo = $doc->toString(1);
 
-    [200, ['Content-Type' => 'application/xhtml+xml'], [$foo]];
+    [200, ['Content-Type' => 'application/xhtml+xml',
+           'Cache-Control' => 'no-cache'],
+     [$foo]];
 };
 
 =head3 C<PROPFIND>
@@ -708,6 +714,41 @@ C<Date>
 =cut
 
 $DISPATCH{raw}{POST} = sub {
+    my ($self, $header, $query, $content) = @_;
+
+    # XXX there is probably a way more clever way of doing this but i
+    # don't care
+    my %p = (content => $content);
+    if (my $x = $header->content_type) {
+        $p{type} = $x;
+    }
+    if (my $x = $header->content_type_charset) {
+        $p{charset} = $x;
+    }
+    if (my $x = $header->content_encoding) {
+        $p{encoding} = $x;
+    }
+    if (my $x = $header->content_language) {
+        $p{type} = $x;
+    }
+    if (my $x = $header->date) {
+        #warn $x;
+        $p{mtime} = $x; #DateTime->from_epoch(epoch => $x);
+    }
+
+    my $store = $self->store;
+
+    my $obj = $store->add(%p);
+    #eval { $store->add(%p) };
+    #if ($@
+    #return [500, [], []] if $@;
+    my $pri = $store->_primary;
+    my $ni  = $obj->digest($pri);
+    my $cl = sprintf
+        '/.well-known/ni/%s/%s', $ni->algorithm, $ni->b64digest(1);
+
+    # XXX is this in gross violation of HTTP semantics?
+    [204, ['Content-Location' => $cl, 'ETag' => qq{"$ni"}], []];
 };
 
 # in the case of POST, we have a special location for
@@ -860,7 +901,7 @@ sub respond {
     # now that that's sorted out, here's the resolver:
 
     my $header = $req->headers;
-    my $body   = $req->content;
+    my $body   = $req->body;
     my $uri    = $req->uri;
     my $path   = $uri->path;
     my $query  = $uri->query_form_hash;
@@ -945,7 +986,40 @@ sub respond {
             $type = 'raw';
         }
         elsif ($segments[0] eq $self->post_form) {
-            $type = 'form';
+            # only form-data plz
+            return [415, [], []]
+                unless $header->content_type eq 'multipart/form-data';
+
+            if (my ($field) = $req->upload) {
+                my ($upload) = $req->upload($field);
+                # overwrite content file handle
+                open $body, $upload->path;
+                binmode $body;
+
+                #my $x = do { local $/; <$body> };
+                #warn $x;
+
+                #seek($body, 0, 0);
+
+                # overwrite headers
+                my $h = $upload->headers;
+
+                warn $header->as_string, $h->as_string;
+
+                # override date header if one is not included
+                $h->date($header->date) if $header->date and !$h->date;
+                $header = $h;
+
+                # duplicate raw type
+                $type = 'raw';
+            }
+            else {
+                warn 'no upload field';
+                warn join(', ', $req->body_parameters->keys);
+                warn $header->as_string;
+                
+                return [409, [], []];
+            }
         }
         else {
             # definitely partial
@@ -980,7 +1054,7 @@ sub respond {
             }
 
             if ($meth eq 'HEAD') {
-                warn 'lol';
+                #warn 'lol';
                 $ret->[2] = [];
             }
 
@@ -997,20 +1071,6 @@ sub respond {
         # if we don't positively identify a resource type, return 404
         return [404, [], []];
     }
-
-    # then we check for exact matches to uploader URI paths
-
-    # first segment match 
-
-
-
-
-
-    # otherwise return the handler's response
-
-
-    # we should return a Plack::Response. maybe?
-    Plack::Response->new(200);
 }
 
 =head1 TO DO
