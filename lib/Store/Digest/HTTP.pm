@@ -18,6 +18,7 @@ use XML::LibXML::LazyBuilder qw(DOM F E P);
 use POSIX ();
 use Scalar::Util ();
 use utf8;
+use URI::ni;
 
 # XXX put this in a role or something
 my %DIGESTS = (
@@ -185,7 +186,9 @@ $DISPATCH{object}{GET} = sub {
     my ($self, $header, $query) = @_;
     # put the algo/digest into the query component
 
-    my @obj = $self->store->get(@{$query}{qw(digest algorithm)});
+    my $get = URI->new(sprintf 'ni:///%s;%s', @{$query}{qw(algorithm digest)});
+
+    my @obj = $self->store->get($get);
 
     #warn scalar @obj;
 
@@ -418,7 +421,7 @@ RDFa, RDF/XML, N3/Turtle, and JSON-LD variants.
 
 $DISPATCH{partial}{GET} = sub {
     # we need (maybe) algo, non-zero partial digest, header set
-    my ($self, $
+#    my ($self, $
 };
 
 =head3 C<PROPFIND>
@@ -1021,7 +1024,7 @@ sub respond {
                 warn 'no upload field';
                 warn join(', ', $req->body_parameters->keys);
                 warn $header->as_string;
-                
+
                 return [409, [], []];
             }
         }

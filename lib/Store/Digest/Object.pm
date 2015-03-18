@@ -326,6 +326,23 @@ sub syntax_valid {
     shift->_flags & (SYNTAX_CHECKED|SYNTAX_VALID);
 }
 
+=head2 matches $DIGEST
+
+Pass in a L<URI::ni> object or string representing a RFC6920 named
+identifier, and this method will tell you you whether or not the
+object possesses a matching digest.
+
+=cut
+
+sub matches {
+    my ($self, $digest) = @_;
+    $digest = URI->new($digest)->canonical;
+    Carp::croak('Input must be an RFC6920 address')
+          unless $digest->isa('URI::ni');
+    my $d = $self->_digests->{$digest->algorithm} or return;
+    return $digest->eq($d);
+}
+
 =head2 as_string
 
 =cut

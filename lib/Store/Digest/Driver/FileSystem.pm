@@ -18,8 +18,9 @@ use Store::Digest::Object;
 use Store::Digest::Stats;
 
 use BerkeleyDB qw(DB_CREATE DB_GET_BOTH DB_INIT_CDB DB_INIT_LOCK
-                  DB_INIT_TXN DB_INIT_MPOOL DB_NEXT DB_SET_RANGE
-                  DB_GET_BOTH);
+                  DB_INIT_LOG DB_INIT_TXN DB_INIT_MPOOL DB_NEXT
+                  DB_SET_RANGE DB_GET_BOTH DB_RECOVER DB_RECOVER_FATAL
+                  DB_DIRTY_READ DB_AUTO_COMMIT);
 
 use Path::Class  ();
 use File::Copy   ();
@@ -150,11 +151,13 @@ sub BUILD {
     $self->_create_dirs;
 
     #warn $self->dir->absolute;
-    my $flags = DB_CREATE|DB_INIT_MPOOL|DB_INIT_TXN|DB_INIT_LOCK;
+    my $flags = DB_CREATE|DB_INIT_MPOOL|DB_INIT_TXN|
+        DB_INIT_LOCK|DB_INIT_LOG;
     my $env = BerkeleyDB::Env->new(
-        -Home  => $self->dir->absolute->stringify,
-        -Mode  => 0600,
-        -Flags => $flags,
+        -Home    => $self->dir->absolute->stringify,
+        -Mode    => 0600,
+        -Flags   => $flags,
+        -ErrFile => $self->dir->absolute->file('error.log')->stringify,
     ) or Carp::croak
         ("Can't create transaction environment: $BerkeleyDB::Error");
 
@@ -165,9 +168,9 @@ sub BUILD {
     # create control
     my $control = BerkeleyDB::Hash->new(
         -Env      => $env,
-        -Flags    => DB_CREATE,
+        -Flags    => DB_CREATE|DB_AUTO_COMMIT,
         -Mode     => 0600,
-        -Txn      => $txn,
+        #-Txn      => $txn,
         -Filename => 'control',
     ) or Carp::croak
         ("Can't create/bind control database: $BerkeleyDB::Error");
@@ -269,10 +272,10 @@ sub BUILD {
 
         my $entries = BerkeleyDB::Btree->new(
             -Env      => $env,
-            -Flags    => DB_CREATE,
+            -Flags    => DB_CREATE|DB_AUTO_COMMIT,
             -Mode     => 0600,
             -Filename => $k,
-            -Txn      => $txn,
+            #-Txn      => $txn,
         ) or Carp::croak
             ("Can't create/bind $k database: $BerkeleyDB::Error");
 
@@ -296,6 +299,29 @@ sub DEMOLISH {
 =head2 add
 
 =cut
+
+# File::MimeInfo::mimetype_isa only tells you if the child type is an
+# immediate descendant of its parent, which is practically useless.
+sub _mimetype_isa_really {
+    my ($child, $ancestor) = @_;
+    return unless defined $child && defined $ancestor;
+    my @q = ($child);
+    my %t;
+    do {
+        for my $t (File::MimeInfo::mimetype_isa(shift @q)) {
+            $t = lc $t; # JIC
+            push @q, $t unless defined $t{$t};
+            $t{$t}++;
+        }
+    } while @q;
+
+    if (defined $ancestor) {
+        return !!$t{$ancestor};
+    }
+    else {
+        return sort keys %t;
+    }
+}
 
 sub _file_for {
     my ($self, $digest) = @_;
@@ -381,7 +407,7 @@ sub add {
     my $ctl = $self->_control;
 
     # open transactions on all databases
-    my $txn = $self->_env->txn_begin;
+    my $txn = $self->_env->txn_begin or Carp::croak("Could not open transaction: $BerkeleyDB::Error " . $self->_env->status);
     $txn->Txn($ctl, values %{$self->_entries});
 
     # Step 1: record digests as we read the content handle into a
@@ -490,9 +516,10 @@ sub add {
         $p{size}    = $stat->size;
         $p{content} = $target->openr;
 
-        # get the type by magic if it's missing
-        $p{type} = File::MimeInfo::Magic::mimetype($target->stringify)
-            unless $p{type};
+        # get the type by 'magic' if it's missing or incorrect
+        my $type = File::MimeInfo::Magic::mimetype($target->stringify);
+        $p{type} = $type
+            unless ($p{type} && _mimetype_isa_really($p{type}, $type));
 
         # ctime is required
         $p{ctime} = $now;
@@ -573,10 +600,14 @@ sub get {
     my $primary = $algo eq $pri ? $index : $self->_entries->{$pri};
 
     # open a transaction to prevent stuff from changing mid-select
-    my $txn     = $self->_env->txn_begin;
+    my $txn     = $self->_env->txn_begin
+        or Carp::croak("Failed to create transaction: $BerkeleyDB::Error"
+                           . $self->_env->status);
     $txn->Txn($index, $primary);
 
-    my $cursor = $index->db_cursor;
+    my $cursor = $index->db_cursor
+        or Carp::croak("Failed to get cursor: $BerkeleyDB::Error "
+                           . $index->status);
 
     # the 'last' key is padded with 0xff up to the algo size
     my $last = $bin . (pack('C', 255) x ($DIGESTS{$algo} - length $bin));

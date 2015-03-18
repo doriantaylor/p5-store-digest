@@ -9,7 +9,8 @@ use URI;
 my ($host, @files) = @ARGV;
 
 my $uri = URI->new
-    (sprintf 'http://%s:5000/0c17e171-8cb1-4c60-9c58-f218075ae9a9', $host);
+    (sprintf 'http://%s/.well-known/ni/0c17e171-8cb1-4c60-9c58-f218075ae9a9',
+    $host);
 
 my $ua = LWP::UserAgent->new;
 
@@ -17,6 +18,7 @@ my $req = HTTP::Request->new('POST', $uri);
 
 for my $file (@files) {
     my @stat = stat $file or die $!;
+    -f $file or next;
     open my $fh, $file or die $!;
     binmode $fh;
     my $clone = $req->clone;
