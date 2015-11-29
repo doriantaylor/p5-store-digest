@@ -344,8 +344,10 @@ sub _deflate {
     my $pri = $self->_primary;
     my $key = $obj->digest($pri)->digest;
     # create concatenated string of binary digests
-    my $rec = join('', map { $obj->digest($_)->digest }
-                       grep { $_ ne $pri } $obj->digest);
+    my $rec = '';
+    utf8::downgrade($rec);
+    $rec .= join('', map { $obj->digest($_)->digest }
+                     grep { $_ ne $pri } $obj->digest);
 
     # get the rest of the object's contents
     my @rec = map {
@@ -354,6 +356,8 @@ sub _deflate {
     push @rec, map { $obj->$_ || '' } qw(type language charset encoding);
     # add them to the record
     $rec .= pack('NNNNCZ*Z*Z*Z*', @rec);
+
+    warn length $rec;
 
     # optionally return the key
     return wantarray ? ($rec, $key) : $rec;
@@ -369,6 +373,8 @@ sub _inflate {
         $file = $f if -f $f;
     }
 
+    #warn length $record;
+
     my $pri = $self->_primary;
     my %rec = ($pri => URI::ni->from_digest($digest, $pri, undef, 256));
 
@@ -380,6 +386,7 @@ sub _inflate {
         # set the offset
         $record = substr($record, $DIGESTS{$algo});
     }
+    #warn unpack "H*", $record;
 
     my %p;
     @p{qw(ctime mtime ptime dtime flags type language charset encoding)}
@@ -475,6 +482,7 @@ sub add {
     # if a record is present then we're just replacing the file
     my $obj;
     my $rec = '';
+    utf8::downgrade($rec);
     $db->db_get($bin, $rec);
     if ($rec) {
         # create an object because it's easier to deal with
@@ -496,6 +504,10 @@ sub add {
 
             # overwrite the record
             $rec = $self->_deflate($obj);
+            # XXX ???? WTF
+            utf8::downgrade($rec);
+            #warn utf8::is_utf8($rec);
+
             $db->db_put($bin, $rec);
             #$db->db_sync;
         }
@@ -540,6 +552,9 @@ sub add {
 
         # overwrite the record
         $rec = $self->_deflate($obj);
+        # XXX ???? WTF
+        utf8::downgrade($rec);
+        #warn utf8::is_utf8($rec);
         $db->db_put($bin, $rec);
         #$db->db_sync;
     }
@@ -655,6 +670,8 @@ sub get {
             $k = $rec;
             $primary->db_get($k, $rec);
         }
+
+        warn length $rec;
 
         push @obj, $self->_inflate($k, $rec);
 

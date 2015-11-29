@@ -1,5 +1,8 @@
 Revision history for Store-Digest
 
+0.02    Sun Nov 29 12:01:29 PST 2015
+        Berkeley DB was storing keys in UTF8 rather than binary. Bad. 
+
 0.01    Date/time
         First version, released on an unsuspecting world.
 
