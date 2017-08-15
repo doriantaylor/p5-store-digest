@@ -77,6 +77,13 @@ has dir => (
     coerce   => 1,
 );
 
+has umask => (
+    is      => 'ro',
+    isa     => 'Int',
+    lazy    => 1,
+    default => 077,
+);
+
 has _env => (
     is  => 'rw',
     isa => 'BerkeleyDB::Env',
@@ -134,7 +141,7 @@ sub _create_dirs {
         }
         else {
             eval {
-                my $mode = 0700;
+                my $mode = 0777 & ~$self->umask | 02000;
                 $dir->mkpath(0, $mode);
             };
             if ($@) {
@@ -150,12 +157,14 @@ sub BUILD {
 
     $self->_create_dirs;
 
+    my $mode = 0666 & ~$self->umask;
+
     #warn $self->dir->absolute;
     my $flags = DB_CREATE|DB_INIT_MPOOL|DB_INIT_TXN|
-        DB_INIT_LOCK|DB_INIT_LOG;
+        DB_INIT_LOCK|DB_INIT_LOG|DB_RECOVER;
     my $env = BerkeleyDB::Env->new(
         -Home    => $self->dir->absolute->stringify,
-        -Mode    => 0600,
+        -Mode    => $mode,
         -Flags   => $flags,
         -ErrFile => $self->dir->absolute->file('error.log')->stringify,
     ) or Carp::croak
@@ -169,14 +178,13 @@ sub BUILD {
     my $control = BerkeleyDB::Hash->new(
         -Env      => $env,
         -Flags    => DB_CREATE|DB_AUTO_COMMIT,
-        -Mode     => 0600,
+        -Mode     => $mode,
         #-Txn      => $txn,
         -Filename => 'control',
     ) or Carp::croak
         ("Can't create/bind control database: $BerkeleyDB::Error");
 
     $self->_control($control);
-
     # control stores:
 
     # algorithms used
@@ -273,7 +281,7 @@ sub BUILD {
         my $entries = BerkeleyDB::Btree->new(
             -Env      => $env,
             -Flags    => DB_CREATE|DB_AUTO_COMMIT,
-            -Mode     => 0600,
+            -Mode     => $mode,
             -Filename => $k,
             #-Txn      => $txn,
         ) or Carp::croak
@@ -290,10 +298,21 @@ sub BUILD {
 
 sub DEMOLISH {
     my $self = shift;
-    for my $db (values %{$self->_entries}) {
-        $db->db_close;
+    my $p = $self->_primary;
+    my $e = $self->_entries;
+
+    # close non-primary entries
+    for my $k (keys %$e) {
+        next if $k eq $p;
+        my $db = $e->{$k};
+        $db->db_close if $db;
     }
-    $self->_control->db_close;
+
+    # now close primary
+    $e->{$p}->db_close if $e->{$p};
+
+    # now close control
+    $self->_control->db_close if $self->_control;
 }
 
 =head2 add
@@ -357,7 +376,7 @@ sub _deflate {
     # add them to the record
     $rec .= pack('NNNNCZ*Z*Z*Z*', @rec);
 
-    warn length $rec;
+    #warn length $rec;
 
     # optionally return the key
     return wantarray ? ($rec, $key) : $rec;
@@ -447,7 +466,7 @@ sub add {
 
     # We will have to nuke this tempfile on our own.
     $tempfh->close;
-    chmod 0400, $tempname; # XXX tunable perms?
+    chmod 0444 & ~$self->umask, $tempname; # XXX tunable perms?
 
     # Convert these into digests now
     $p{digests} ||= {};
@@ -466,8 +485,9 @@ sub add {
         unlink $tempname;
     }
     else {
+        my $mode = 0777 & ~$self->umask | 02000;
         my $parent = $target->parent;
-        eval { $parent->mkpath };
+        eval { $parent->mkpath(0, $mode) };
         Carp::croak("Can't create container path $parent: $@") if $@;
 
         # ONLY IF MISSING DO YOU ADD THE FILE
@@ -504,7 +524,7 @@ sub add {
 
             # overwrite the record
             $rec = $self->_deflate($obj);
-            # XXX ???? WTF
+            # XXX ???? WTF how many times do i have to re-downgrade
             utf8::downgrade($rec);
             #warn utf8::is_utf8($rec);
 
@@ -671,7 +691,7 @@ sub get {
             $primary->db_get($k, $rec);
         }
 
-        warn length $rec;
+        #warn length $rec;
 
         push @obj, $self->_inflate($k, $rec);
 
