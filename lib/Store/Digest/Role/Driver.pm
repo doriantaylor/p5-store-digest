@@ -113,7 +113,12 @@ around [qw(get remove forget)] => sub {
 
     # XXX: this can be blessed as a URI::ni and still messed up
     unless (Scalar::Util::blessed($digest)) {
-        $digest = URI::ni->from_digest($digest, $algo, undef, $radix);
+        if ($digest =~ /^ni:/i and (!$radix or $radix != 256)) {
+            $digest = URI->new($digest);
+        }
+        else {
+            $digest = URI::ni->from_digest($digest, $algo, undef, $radix);
+        }
         #warn $digest;
     }
 

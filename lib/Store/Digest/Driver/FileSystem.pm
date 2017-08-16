@@ -19,7 +19,8 @@ use Store::Digest::Stats;
 
 use BerkeleyDB qw(DB_CREATE DB_GET_BOTH DB_INIT_CDB DB_INIT_LOCK
                   DB_INIT_LOG DB_INIT_TXN DB_INIT_MPOOL DB_NEXT
-                  DB_SET_RANGE DB_GET_BOTH DB_RECOVER DB_RECOVER_FATAL
+                  DB_SET_RANGE DB_GET_BOTH DB_GET_BOTH_RANGE
+                  DB_RECOVER DB_RECOVER_FATAL
                   DB_DIRTY_READ DB_AUTO_COMMIT);
 
 use Path::Class  ();
@@ -27,6 +28,7 @@ use File::Copy   ();
 use MIME::Base32 ();
 use URI::ni      ();
 use Math::BigInt ();
+use List::Util   ();
 
 use File::MimeInfo::Magic ();
 
@@ -276,9 +278,20 @@ sub BUILD {
 
 
     # create algo btrees, these enable partial matches
-    for my $k (@{$self->_algorithms}) {
+    my $pri  = $self->_primary;
+    my $ent  = $self->_entries;
+    my $primary = $ent->{$pri} = BerkeleyDB::Btree->new(
+        -Env      => $env,
+        -Flags    => DB_CREATE|DB_AUTO_COMMIT,
+        -Mode     => $mode,
+        -Filename => $pri,
+    ) or Carp::croak
+        ("Can't create/bind primary database $pri: $BerkeleyDB::Error");
 
-        my $entries = BerkeleyDB::Btree->new(
+    my @rest = grep { $_ ne $pri } @{$self->_algorithms};
+    for my $i (0..$#rest) {
+        my $k = $rest[$i];
+        my $secondary = BerkeleyDB::Btree->new(
             -Env      => $env,
             -Flags    => DB_CREATE|DB_AUTO_COMMIT,
             -Mode     => $mode,
@@ -287,7 +300,14 @@ sub BUILD {
         ) or Carp::croak
             ("Can't create/bind $k database: $BerkeleyDB::Error");
 
-        $self->_entries->{$k} = $entries;
+        $self->_entries->{$k} = $secondary;
+
+        # now we associate secondary to primary
+        my $len = $DIGESTS{$k};
+        my $off = List::Util::sum0(@DIGESTS{@rest[0..$i]}) - $len;
+        my $sub = sub { $_[2] = substr($_[1], $off, $len); return 0; };
+
+        $primary->associate($secondary, $sub);
     }
 
     $txn->txn_commit;
@@ -534,14 +554,14 @@ sub add {
     }
     else {
         # set the mappings for the other digest algorithms
-        my $e = $self->_entries;
-        for my $algo (grep { $_ ne $pri } @{$self->_algorithms}) {
-            my $k = $p{digests}{$algo}->digest;
-            utf8::downgrade($k); # dat utf8
+        # my $e = $self->_entries;
+        # for my $algo (grep { $_ ne $pri } @{$self->_algorithms}) {
+        #     my $k = $p{digests}{$algo}->digest;
+        #     utf8::downgrade($k); # dat utf8
 
-            $e->{$algo}->db_put($k, $bin);
-            #$e->{$algo}->db_sync;
-        }
+        #     $e->{$algo}->db_put($k, $bin);
+        #     #$e->{$algo}->db_sync;
+        # }
 
         # tie up loose ends re the file
         my $stat    = $target->stat;
@@ -624,10 +644,21 @@ sub _obj_to_digest {
 sub get {
     my $self   = shift;
     my $digest = $self->_obj_to_digest(shift) or return;
+
     # get raw data whatnot
     my $algo = $digest->algorithm;
     my $bin  = $digest->digest;
     utf8::downgrade($bin); # JIC
+
+    my @out = $self->_get($bin, $algo);
+
+    wantarray ? @out : \@out;
+}
+
+sub _get {
+    my ($self, $bin, $algo, $txn) = @_;
+
+    my $txn_in  = !!$txn;
 
     # deal with database mumbo jumbo
     my $pri     = $self->_primary;
@@ -635,8 +666,8 @@ sub get {
     my $primary = $algo eq $pri ? $index : $self->_entries->{$pri};
 
     # open a transaction to prevent stuff from changing mid-select
-    my $txn     = $self->_env->txn_begin
-        or Carp::croak("Failed to create transaction: $BerkeleyDB::Error"
+    $txn = $txn ? $self->_env->txn_begin($txn) : $self->_env->txn_begin
+        or Carp::croak("Failed to create transaction: $BerkeleyDB::Error "
                            . $self->_env->status);
     $txn->Txn($index, $primary);
 
@@ -659,44 +690,77 @@ sub get {
     my $flag = DB_SET_RANGE | DB_NEXT | DB_GET_BOTH;
     my $d    = $bin;
 
-    while ($cursor->c_get($d, $rec, $flag) == 0) {
-        #warn unpack('H*', $d);
-        # set this flag right away
-        #$flag = DB_NEXT | DB_GET_BOTH;
+    if ($algo eq $pri) {
+        #warn "$algo eq $pri";
+        while ($cursor->c_get($d, $rec, $flag) == 0) {
+            last if $d gt $last;
 
-        # exit the loop if a key is lexically greater than 'last'
-        last if $d gt $last;
+            push @obj, $self->_inflate($d, $rec);
 
-        my $k = $d;
-
-        # create the 'next' key by turning it into a bigint,
-        # incrementing it, then turning it back into a string
-
-        my $hk = unpack('H*', $k);
-        #warn $hk;
-        my $bi = Math::BigInt->new("0x$hk") + 1;
-        #warn $bi->as_hex;
-        #$bi += 1;
-        #warn $bi->as_hex;
-
-        my $bh = substr($bi->as_hex, 2);
-        $bh = ('0' x ($DIGESTS{$algo}*2 - length $bh)) . $bh;
-        my $bb = pack 'H*', $bh;
-        #warn unpack('H*', $bb);
-
-        # look up the full record in case the requested algorithm is
-        # not the primary one.
-        if ($algo ne $pri) {
-            $k = $rec;
-            $primary->db_get($k, $rec);
+            $d = _bin_inc($d, $algo);
         }
-
-        #warn length $rec;
-
-        push @obj, $self->_inflate($k, $rec);
-
-        $d = $bb;
     }
+    else {
+        #warn "$algo ne $pri";
+        my $pk;
+        while ($cursor->c_pget($d, $pk, $rec, $flag) == 0) {
+            last if $d gt $last;
+
+            #warn unpack 'H*', $d;
+            #warn unpack 'H*', $pk;
+
+            my $obj = $self->_inflate($pk, $rec);
+
+            # XXX WTF SLEEPYCAT why do i have to do this?
+            # DB_SET_RANGE does not set the key in c_pget so we have
+            # to set the key manually, and this is the easiest way to
+            # do it.
+            $d = $obj->digest($algo)->digest;
+
+            push @obj, $obj;
+
+            $d = _bin_inc($d, $algo);
+        }
+    }
+
+    # while ($cursor->c_get($d, $rec, $flag) == 0) {
+    #     #warn unpack('H*', $d);
+    #     # set this flag right away
+    #     #$flag = DB_NEXT | DB_GET_BOTH;
+
+    #     # exit the loop if a key is lexically greater than 'last'
+    #     last if $d gt $last;
+
+    #     my $k = $d;
+
+    #     # create the 'next' key by turning it into a bigint,
+    #     # incrementing it, then turning it back into a string
+
+    #     my $hk = unpack('H*', $k);
+    #     #warn $hk;
+    #     my $bi = Math::BigInt->new("0x$hk") + 1;
+    #     #warn $bi->as_hex;
+    #     #$bi += 1;
+    #     #warn $bi->as_hex;
+
+    #     my $bh = substr($bi->as_hex, 2);
+    #     $bh = ('0' x ($DIGESTS{$algo}*2 - length $bh)) . $bh;
+    #     my $bb = pack 'H*', $bh;
+    #     #warn unpack('H*', $bb);
+
+    #     # look up the full record in case the requested algorithm is
+    #     # not the primary one.
+    #     if ($algo ne $pri) {
+    #         $k = $rec;
+    #         $primary->db_get($k, $rec);
+    #     }
+
+    #     #warn length $rec;
+
+    #     push @obj, $self->_inflate($k, $rec);
+
+    #     $d = $bb;
+    # }
 
     $txn->txn_commit;
 
@@ -706,6 +770,24 @@ sub get {
 
     # XXX this is no good
     wantarray ? @obj : \@obj;
+}
+
+sub _bin_inc {
+    my ($bin, $algo) = @_;
+    my $hex = unpack 'H*', $bin;
+    my $int = Math::BigInt->new("0x$hex") + 1;
+
+    # warn "hex in: $hex";
+
+    # give us a hex string sans '0x'
+    $hex = substr $int->as_hex, 2;
+    # now zero-pad
+    $hex = ('0' x ($DIGESTS{$algo} * 2 - length $hex)) . $hex;
+
+    # warn "hex out: $hex";
+
+    # and that's it
+    return pack 'H*', $hex;
 }
 
 # I want to be able to do partial matches for gets but not for purges.
@@ -721,41 +803,143 @@ sub remove {
     my $bin  = $digest->digest;
     utf8::downgrade($bin);
 
-    my $txn = $self->_env->txn_begin;
+    my $txn = $self->_env->txn_begin
+        or Carp::croak("Failed to create transaction: $BerkeleyDB::Error "
+                           . $self->_env->status);
+
+    my @obj = $self->_get($bin, $algo, $txn);
+
     $txn->Txn($self->_control, values %{$self->_entries});
 
-    my $pri = $self->_primary;
-    unless ($algo eq $pri) {
-        $self->_entries->{$algo}->db_get($bin, my $val);
+    my $pri   = $self->_primary;
+    my $db    = $self->_entries->{$pri};
+    my $dtime = DateTime->now;
 
-        # return if we can't find a match
-        unless ($val) {
-            $txn->txn_commit;
-            return;
+    my %ctl = (deleted => 0, bytes => 0);
+
+    my (@out, @del);
+    while (my $obj = shift @obj) {
+        next if $obj->dtime;
+
+        # update deletion time
+        $obj->dtime($dtime->clone);
+
+        my $ni  = $obj->digest($pri);
+        my $bin = $ni->digest;
+        my $rec = $self->_deflate($obj);
+        # now for some cargo culting
+        utf8::downgrade($bin);
+        utf8::downgrade($rec);
+        if ($db->db_put($bin, $rec) != 0) {
+            $txn->txn_abort;
+            Carp::croak("Could not update $ni: $BerkeleyDB::Error");
         }
 
-        $bin = $val;
+        push @del, $self->_file_for($bin);
+
+        push @out, $obj;
+
+        $ctl{deleted}++;
+        $ctl{bytes} += $obj->size;
     }
 
-    $self->_entries->{$pri}->db_get($bin, my $rec);
-    unless ($rec) {
-        $txn->txn_commit;
-        return;
+    if (@out) {
+        my $ctl = $self->_control;
+
+        if ($ctl{deleted}) {
+            $ctl->db_get(deleted => my $del);
+            $ctl->db_put(deleted => $del + $ctl{deleted});
+        }
+        if ($ctl{bytes}) {
+            $ctl->db_get(bytes => my $bytes);
+            $ctl->db_put(bytes => $bytes - $ctl{bytes});
+        }
+        $ctl->db_put(mtime => $dtime->epoch);
     }
 
-    my $obj = $self->_inflate($bin, $rec);
+    # now delete the files
+    map { $_->remove } @del;
 
-    # set the dtime if not already set
+    $txn->txn_commit;
 
-    # increment deleted objects
-    # delete the file
-    my $file = $self->_file_for($bin);
-
-    $obj;
+    return wantarray ? @obj : \@obj;
 }
 
 # also purges
 sub forget {
+    my $self   = shift;
+    my $digest = $self->_obj_to_digest(shift) or return;
+    # get raw data whatnot
+    my $algo = $digest->algorithm;
+    my $bin  = $digest->digest;
+    utf8::downgrade($bin);
+
+    my $txn = $self->_env->txn_begin
+        or Carp::croak("Failed to create transaction: $BerkeleyDB::Error "
+                           . $self->_env->status);
+
+    my @obj = $self->_get($bin, $algo, $txn);
+
+    $txn->Txn($self->_control, values %{$self->_entries});
+
+    my $pri   = $self->_primary;
+    my $db    = $self->_entries->{$pri};
+    my $dtime = DateTime->now;
+
+    my %ctl = (deleted => 0, bytes => 0);
+
+    my @del;
+    for my $obj (@obj) {
+
+        # add to deleted
+        if ($obj->dtime) {
+            $ctl{deleted}++;
+        }
+        else {
+            $ctl{bytes} += $obj->size;
+        }
+
+        $obj->dtime($dtime->clone);
+        $obj->_content(undef);
+
+        my $ni  = $obj->digest($pri);
+        my $bin = $ni->digest;
+        utf8::downgrade($bin);
+
+        # now do the actual removing (secondary entries will also be removed)
+        $db->db_del($bin);
+
+        # queue file for deletion
+        push @del, $self->_file_for($bin);
+    }
+
+    if (@obj) {
+        my $ctl = $self->_control;
+
+        # decrement object count
+        $ctl->db_get(objects => my $count);
+        $ctl->db_put(objects => $count - @obj);
+
+        # *decrement* deleted count of any objects previously deleted
+        if ($ctl{deleted}) {
+            $ctl->db_get(deleted => my $del);
+            $ctl->db_put(deleted => $del - $ctl{deleted});
+        }
+
+        # decrement byte count of any objects stored
+        if ($ctl{bytes}) {
+            $ctl->db_get(bytes => my $bytes);
+            $ctl->db_put(bytes => $bytes - $ctl{bytes});
+        }
+        $ctl->db_put(mtime => $dtime->epoch);
+    }
+
+    # now delete the files
+    map { $_->remove } @del;
+
+    $txn->txn_commit;
+
+    wantarray ? @obj : \@obj;
 }
 
 sub list {
