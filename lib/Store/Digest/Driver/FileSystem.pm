@@ -21,13 +21,14 @@ use BerkeleyDB qw(DB_CREATE DB_GET_BOTH DB_INIT_CDB DB_INIT_LOCK
                   DB_INIT_LOG DB_INIT_TXN DB_INIT_MPOOL DB_NEXT
                   DB_SET_RANGE DB_GET_BOTH DB_GET_BOTH_RANGE
                   DB_RECOVER DB_RECOVER_FATAL DB_DONOTINDEX
-                  DB_DIRTY_READ DB_AUTO_COMMIT);
+                  DB_DUP DB_DUPSORT DB_DIRTY_READ DB_AUTO_COMMIT);
 
 use Path::Class  ();
 use File::Copy   ();
 use MIME::Base32 ();
 use URI::ni      ();
 use Math::BigInt ();
+use Scalar::Util ();
 use List::Util   ();
 
 use File::MimeInfo::Magic ();
@@ -35,6 +36,7 @@ use File::MimeInfo::Magic ();
 # directories
 use constant STORE   => 'store';
 use constant TEMP    => 'tmp';
+use constant INDEX   => 'index';
 use constant BUFSIZE => 2**13;
 
 
@@ -60,6 +62,52 @@ my %EMPTY = (
 # pack these down
 %EMPTY = map { $_ => pack('H*', $EMPTY{$_}) } keys %EMPTY;
 
+sub _pack_n {
+    my $val = shift;
+    return unless defined $val;
+    return unless Scalar::Util::looks_like_number($val);
+    return unless $val > 0;
+    return unless $val == int $val;
+
+    pack 'N', $val;
+}
+
+sub _pack_z {
+    my $val = shift;
+    return unless defined $val;
+    $val =~ s/^\s*(.*?)\s*$/$1/sm;
+    return if $val eq '';
+
+    pack 'Z*', $val;
+}
+
+my %META = (
+    ctime    => \&_pack_n,
+    mtime    => \&_pack_n,
+    dtime    => \&_pack_n,
+    ptime    => \&_pack_n,
+    type     => \&_pack_z,
+    language => \&_pack_z,
+    charset  => \&_pack_z,
+    encoding => \&_pack_z,
+);
+
+sub _meta_keyfunc {
+    my ($self, $field) = @_;
+    my $pri   = $self->_primary;
+    my $algos = [@{$self->_algorithms}];
+    my $func  = $META{$field};
+
+    return sub {
+        my %p = _inflate_rec($pri, $algos, $_[0], $_[1], 1);
+        if (defined $p{$field} and defined (my $val = $func->($p{$field}))) {
+            $_[2] = $val;
+            return 0;
+        }
+        return DB_DONOTINDEX;
+    };
+}
+
 =head1 NAME
 
 Store::Digest::Driver::FileSystem - File system driver for Store::Digest
@@ -72,6 +120,7 @@ Version 0.01
 
 our $VERSION = '0.01';
 
+# target directory
 has dir => (
     is       => 'ro',
     isa      => Directory,
@@ -79,6 +128,7 @@ has dir => (
     coerce   => 1,
 );
 
+# file permissions
 has umask => (
     is      => 'ro',
     isa     => 'Int',
@@ -86,16 +136,19 @@ has umask => (
     default => 077,
 );
 
+# transaction environment
 has _env => (
     is  => 'rw',
     isa => 'BerkeleyDB::Env',
 );
 
+# metadata for the actual database
 has _control => (
     is  => 'rw',
     isa => 'BerkeleyDB::Hash',
 );
 
+# the payload data itself
 has _entries => (
     is      => 'ro',
     isa     => HashRef,
@@ -103,6 +156,15 @@ has _entries => (
     default => sub { {} },
 );
 
+# metadata -> object mapping
+has _indices => (
+    is      => 'ro',
+    isa     => HashRef,
+    lazy    => 1,
+    default => sub { {} },
+);
+
+# the primary digest algorithm (where the metadata is stored)
 has _primary => (
     is       => 'rw',
     isa      => Token,
@@ -110,12 +172,14 @@ has _primary => (
     init_arg => 'primary',
 );
 
+# all algorithms in use
 has _algorithms => (
     is       => 'rw',
     isa      => ArrayRef[Token],
     required => 0,
     init_arg => 'algorithms',
 );
+
 
 =head1 SYNOPSIS
 
@@ -310,6 +374,55 @@ sub BUILD {
         $primary->associate($secondary, $sub);
     }
 
+    # now do metadata indices
+    my @meta = qw(ctime mtime dtime ptime type language charset encoding);
+    my $meta = $self->_indices;
+    my %init;
+    for my $k (@meta) {
+        my $index = $meta->{$k} = BerkeleyDB::Btree->new(
+            -Env      => $env,
+            -Flags    => DB_CREATE|DB_AUTO_COMMIT,
+            -Property => DB_DUP|DB_DUPSORT,
+            -Mode     => $mode,
+            -Filename => INDEX,
+            -Subname  => $k,
+        ) or Carp::croak
+            ("Can't create/bind $k index database: $BerkeleyDB::Error");
+
+        # add this to initialization queue
+        my $st = $index->db_stat;
+        if ($st->{bt_nkeys} == 0) {
+            warn "adding $k to init queue";
+            $init{$k} = $META{$k};
+        }
+        else {
+            $primary->associate($index, $self->_meta_keyfunc($k));
+        }
+    }
+
+    # now run init queue
+    if (keys %init) {
+        my $cursor = $primary->db_cursor;
+        my ($pk, $rec) = (0, 0);
+        while ($cursor->c_get($pk, $rec, DB_NEXT) == 0) {
+            warn unpack 'H*', $pk;
+            warn unpack 'H*', $rec;
+
+            my %p = _inflate_rec($pri, [@rest], $pk, $rec, 1);
+            while (my ($ix, $func) = each %init) {
+                if (defined $p{$ix} and defined (my $k = $func->($p{$ix}))) {
+                    warn "adding $ix => $p{$ix}";
+                    my $wat = $meta->{$ix}->db_put($k, $pk);
+                    warn "wat $wat: $BerkeleyDB::Error" if $wat;
+                }
+            }
+        }
+
+        for my $ix (keys %init) {
+            $primary->associate($meta->{$ix}, $self->_meta_keyfunc($ix));
+        }
+    }
+
     $txn->txn_commit;
 
     # hashes ctime atime dtime type language encoding charset
@@ -402,20 +515,21 @@ sub _deflate {
     return wantarray ? ($rec, $key) : $rec;
 }
 
-# inflate just the record part
+# inflate just the record part; not an instance method
 sub _inflate_rec {
-    my ($self, $digest, $record, $skip) = @_;
+    my ($pri, $algos, $digest, $record, $skip) = @_;
+
+    #warn $pri, ' ', join ',', @$algos;
 
     my (%p, %rec);
 
-    my $pri = $self->_primary;
     unless ($skip) {
         %rec = ($pri => URI::ni->from_digest($digest, $pri, undef, 256));
         $p{digests} = \%rec;
     }
 
     # run the digests off the front
-    for my $algo (grep { $_ ne $pri } @{$self->_algorithms}) {
+    for my $algo (grep { $_ ne $pri } @$algos) {
         unless ($skip) {
             my $b = substr $record, 0, $DIGESTS{$algo};
             $rec{$algo} = URI::ni->from_digest($b, $algo, undef, 256);
@@ -488,7 +602,9 @@ sub add {
     my $ctl = $self->_control;
 
     # open transactions on all databases
-    my $txn = $self->_env->txn_begin or Carp::croak("Could not open transaction: $BerkeleyDB::Error " . $self->_env->status);
+    my $txn = $self->_env->txn_begin or Carp::croak
+        ("Could not open transaction: $BerkeleyDB::Error "
+             . $self->_env->status);
     $txn->Txn($ctl, values %{$self->_entries});
 
     # Step 1: record digests as we read the content handle into a
