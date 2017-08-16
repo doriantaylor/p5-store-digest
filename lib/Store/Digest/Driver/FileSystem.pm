@@ -20,7 +20,7 @@ use Store::Digest::Stats;
 use BerkeleyDB qw(DB_CREATE DB_GET_BOTH DB_INIT_CDB DB_INIT_LOCK
                   DB_INIT_LOG DB_INIT_TXN DB_INIT_MPOOL DB_NEXT
                   DB_SET_RANGE DB_GET_BOTH DB_GET_BOTH_RANGE
-                  DB_RECOVER DB_RECOVER_FATAL
+                  DB_RECOVER DB_RECOVER_FATAL DB_DONOTINDEX
                   DB_DIRTY_READ DB_AUTO_COMMIT);
 
 use Path::Class  ();
@@ -380,13 +380,13 @@ sub _deflate {
     my ($self, $obj) = @_;
 
     # find the primary algorithm
+    my @alg = @{$self->_algorithms};
     my $pri = $self->_primary;
     my $key = $obj->digest($pri)->digest;
     # create concatenated string of binary digests
     my $rec = '';
     utf8::downgrade($rec);
-    $rec .= join('', map { $obj->digest($_)->digest }
-                     grep { $_ ne $pri } $obj->digest);
+    $rec .= join '', map { $obj->digest($_)->digest } grep { $_ ne $pri } @alg;
 
     # get the rest of the object's contents
     my @rec = map {
@@ -400,6 +400,41 @@ sub _deflate {
 
     # optionally return the key
     return wantarray ? ($rec, $key) : $rec;
+}
+
+# inflate just the record part
+sub _inflate_rec {
+    my ($self, $digest, $record, $skip) = @_;
+
+    my (%p, %rec);
+
+    my $pri = $self->_primary;
+    unless ($skip) {
+        %rec = ($pri => URI::ni->from_digest($digest, $pri, undef, 256));
+        $p{digests} = \%rec;
+    }
+
+    # run the digests off the front
+    for my $algo (grep { $_ ne $pri } @{$self->_algorithms}) {
+        unless ($skip) {
+            my $b = substr $record, 0, $DIGESTS{$algo};
+            $rec{$algo} = URI::ni->from_digest($b, $algo, undef, 256);
+        }
+
+        # set the offset
+        $record = substr($record, $DIGESTS{$algo});
+    }
+
+    # now unpack the rest of the record
+    @p{qw(ctime mtime ptime dtime flags type language charset encoding)}
+        = unpack('NNNNCZ*Z*Z*Z*', $record);
+
+    # delete the cruft
+    for my $k (qw(dtime type language charset encoding)) {
+        delete $p{$k} unless $p{$k};
+    }
+
+    wantarray ? %p : \%p;
 }
 
 # take a record and return an object
@@ -723,50 +758,7 @@ sub _get {
         }
     }
 
-    # while ($cursor->c_get($d, $rec, $flag) == 0) {
-    #     #warn unpack('H*', $d);
-    #     # set this flag right away
-    #     #$flag = DB_NEXT | DB_GET_BOTH;
-
-    #     # exit the loop if a key is lexically greater than 'last'
-    #     last if $d gt $last;
-
-    #     my $k = $d;
-
-    #     # create the 'next' key by turning it into a bigint,
-    #     # incrementing it, then turning it back into a string
-
-    #     my $hk = unpack('H*', $k);
-    #     #warn $hk;
-    #     my $bi = Math::BigInt->new("0x$hk") + 1;
-    #     #warn $bi->as_hex;
-    #     #$bi += 1;
-    #     #warn $bi->as_hex;
-
-    #     my $bh = substr($bi->as_hex, 2);
-    #     $bh = ('0' x ($DIGESTS{$algo}*2 - length $bh)) . $bh;
-    #     my $bb = pack 'H*', $bh;
-    #     #warn unpack('H*', $bb);
-
-    #     # look up the full record in case the requested algorithm is
-    #     # not the primary one.
-    #     if ($algo ne $pri) {
-    #         $k = $rec;
-    #         $primary->db_get($k, $rec);
-    #     }
-
-    #     #warn length $rec;
-
-    #     push @obj, $self->_inflate($k, $rec);
-
-    #     $d = $bb;
-    # }
-
     $txn->txn_commit;
-
-    #warn scalar @obj;
-    #require Data::Dumper;
-    #warn Data::Dumper::Dumper(\@obj);
 
     # XXX this is no good
     wantarray ? @obj : \@obj;
@@ -942,6 +934,7 @@ sub forget {
     wantarray ? @obj : \@obj;
 }
 
+# not sure i remember what this was supposed to do
 sub list {
     my $self = shift;
 }
