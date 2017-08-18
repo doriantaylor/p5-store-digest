@@ -12,17 +12,20 @@ use namespace::autoclean;
 
 # MooseX::Object::Pluggable maybe?
 
+# nope, this!
+use String::RewritePrefix;
+
 =head1 NAME
 
 Store::Digest - Store opaque data objects keyed on their cryptographic digests
 
 =head1 VERSION
 
-Version 0.02
+Version 0.03
 
 =cut
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 
 =head1 SYNOPSIS

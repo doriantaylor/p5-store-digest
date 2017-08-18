@@ -114,11 +114,11 @@ Store::Digest::Driver::FileSystem - File system driver for Store::Digest
 
 =head1 VERSION
 
-Version 0.01
+Version 0.02
 
 =cut
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 # target directory
 has dir => (
@@ -405,15 +405,15 @@ sub BUILD {
         my $cursor = $primary->db_cursor;
         my ($pk, $rec) = (0, 0);
         while ($cursor->c_get($pk, $rec, DB_NEXT) == 0) {
-            warn unpack 'H*', $pk;
-            warn unpack 'H*', $rec;
+            #warn unpack 'H*', $pk;
+            #warn unpack 'H*', $rec;
 
             my %p = _inflate_rec($pri, [@rest], $pk, $rec, 1);
             while (my ($ix, $func) = each %init) {
                 if (defined $p{$ix} and defined (my $k = $func->($p{$ix}))) {
-                    warn "adding $ix => $p{$ix}";
+                    #warn "adding $ix => $p{$ix}";
                     my $wat = $meta->{$ix}->db_put($k, $pk);
-                    warn "wat $wat: $BerkeleyDB::Error" if $wat;
+                    #warn "wat $wat: $BerkeleyDB::Error" if $wat;
                 }
             }
         }

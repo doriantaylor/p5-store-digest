@@ -8,7 +8,25 @@ use Store::Digest::Driver::FileSystem;
 use Path::Class;
 use Carp;
 
-my $driver = Store::Digest::Driver::FileSystem->new(dir => '/tmp/store-digest');
+use Getopt::Long qw(:config bundling no_ignore_case);
+
+sub do_file {
+    my $file = shift;
+    my $stat = $file->stat or return;
+    my $fh = $file->openr;
+    my $obj = $driver->add(content => $fh, mtime => $stat->mtime);
+    print STDERR $obj->as_string;
+}
+
+my %p = (
+    dir => '/tmp/store-digest',
+);
+
+Getopt::Long::GetOptions(
+    'd|dir=s' \$p{dir},
+);
+
+my $driver = Store::Digest::Driver::FileSystem->new(dir => $p{dir});
 
 for my $path (@ARGV) {
     Carp::croak("Nonexistent path") unless -e $path;
@@ -22,12 +40,4 @@ for my $path (@ARGV) {
 }
 
 print STDERR $driver->stats->as_string;
-
-sub do_file {
-    my $file = shift;
-    my $stat = $file->stat;
-    my $fh = $file->openr;
-    my $obj = $driver->add(content => $fh, mtime => $stat->mtime);
-    print STDERR $obj->as_string;
-}
 

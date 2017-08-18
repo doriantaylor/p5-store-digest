@@ -19,6 +19,7 @@ requires 'MooseX::Params::Validate' => '0.18';
 requires 'MooseX::Types'            => '0.35';
 requires 'Path::Class'              => '0.24';
 requires 'Plack'                    => '1.0005';
+requires 'String::RewritePrefix'    => '0.007';
 requires 'URI::ni'                  => '0.03';
 requires 'XML::LibXML::LazyBuilder' => '0.05';
 
