@@ -13,7 +13,8 @@ use namespace::autoclean;
 # MooseX::Object::Pluggable maybe?
 
 # nope, this!
-use String::RewritePrefix;
+use String::RewritePrefix ();
+use Class::Load           ();
 
 =head1 NAME
 
@@ -27,6 +28,11 @@ Version 0.03
 
 our $VERSION = '0.03';
 
+has _driver => (
+    is      => 'rw',
+    does    => 'Store::Digest::Driver',
+    handles => 'Store::Digest::Driver',
+);
 
 =head1 SYNOPSIS
 
@@ -50,7 +56,14 @@ our $VERSION = '0.03';
 =cut
 
 sub BUILD {
-    
+    my ($self, $p) = @_;
+
+    my $driver = delete $p->{driver} || 'FileSystem';
+    ($driver) = String::RewritePrefix->rewrite(
+        { '' => 'Store::Digest::Driver::', '+' => '' }, $driver);
+
+    Class::Load::load_class($driver);
+    $self->_driver($driver->new(%$p));
 }
 
 =head1 AUTHOR

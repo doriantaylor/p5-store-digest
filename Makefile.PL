@@ -7,6 +7,7 @@ author      q{Dorian Taylor <dorian@cpan.org>};
 license     'apache';
 
 requires 'BerkeleyDB'               => '0.51';
+requires 'Class::Load'              => '0.23';
 requires 'DateTime'                 => '0.70';
 requires 'DateTime::Format::HTTP'   => '0.40';
 requires 'File::Copy'               => '2.21';
