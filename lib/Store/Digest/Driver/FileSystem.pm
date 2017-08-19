@@ -8,8 +8,7 @@ use utf8;
 use Moose;
 use namespace::autoclean;
 
-extends 'Store::Digest::Driver';
-with    'Store::Digest::Role::Driver';
+with 'Store::Digest::Driver';
 
 use MooseX::Types::Moose qw(HashRef ArrayRef);
 use Store::Digest::Types qw(Directory DateTimeType Token);
@@ -162,22 +161,6 @@ has _indices => (
     isa     => HashRef,
     lazy    => 1,
     default => sub { {} },
-);
-
-# the primary digest algorithm (where the metadata is stored)
-has _primary => (
-    is       => 'rw',
-    isa      => Token,
-    required => 0,
-    init_arg => 'primary',
-);
-
-# all algorithms in use
-has _algorithms => (
-    is       => 'rw',
-    isa      => ArrayRef[Token],
-    required => 0,
-    init_arg => 'algorithms',
 );
 
 
