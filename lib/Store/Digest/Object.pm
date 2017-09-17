@@ -168,7 +168,7 @@ has charset => (
 =head2 language
 
 Returns the natural language in
-L<http://tools.ietf.org/html/rfc5646|RFC 5646> format, if it was
+L<RFC 5646|http://tools.ietf.org/html/rfc5646> format, if it was
 supplied.
 
 =cut

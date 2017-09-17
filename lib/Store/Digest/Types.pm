@@ -86,8 +86,8 @@ coerce Directory, from Str, via { Path::Class::Dir->new(shift)  };
 
 =head2 Token
 
-A token, as described by L<http://tools.ietf.org/html/rfc2616|RFC
-2616>, section 2.2.
+A token, as described by L<RFC
+2616|http://tools.ietf.org/html/rfc2616>, section 2.2.
 
 =cut
 

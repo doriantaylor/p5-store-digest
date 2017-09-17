@@ -375,7 +375,7 @@ sub BUILD {
         # add this to initialization queue
         my $st = $index->db_stat;
         if ($st->{bt_nkeys} == 0) {
-            warn "adding $k to init queue";
+            #warn "adding $k to init queue";
             $init{$k} = $META{$k};
         }
         else {
@@ -1033,10 +1033,18 @@ sub forget {
     wantarray ? @obj : \@obj;
 }
 
+=head2 list
+
+=cut
+
 # not sure i remember what this was supposed to do
 sub list {
     my $self = shift;
 }
+
+=head2 stats
+
+=cut
 
 # usage stats
 sub stats {

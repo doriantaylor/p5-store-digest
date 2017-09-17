@@ -1,3 +1,4 @@
+#!perl
 use strict;
 use warnings;
 use Test::More;
@@ -15,4 +16,6 @@ eval "use Pod::Coverage $min_pc";
 plan skip_all => "Pod::Coverage $min_pc required for testing POD coverage"
     if $@;
 
-all_pod_coverage_ok();
+all_pod_coverage_ok({
+    also_private => [
+        qr/BUILD|DEMOLISH|BUFSIZE|INDEX|STORE|TE?MP|_CHECKED|_VALID/] });

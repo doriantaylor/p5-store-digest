@@ -40,7 +40,8 @@ has _driver => (
 
     my $store = Store::Digest->new(
         driver  => 'FileSystem',
-        options => { dir => '/var/db/store-digest' },
+        # all other options pass through to the driver
+        dir     => '/var/db/store-digest',
     );
 
     my $obj = $store->add(
