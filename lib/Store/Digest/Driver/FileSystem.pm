@@ -113,11 +113,11 @@ Store::Digest::Driver::FileSystem - File system driver for Store::Digest
 
 =head1 VERSION
 
-Version 0.02
+Version 0.03
 
 =cut
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 # target directory
 has dir => (
@@ -864,6 +864,8 @@ sub _get {
     wantarray ? @obj : $obj[0];
 }
 
+# this creates a binary key which is the "ceiling" of a partial
+# lookup
 sub _bin_inc {
     my ($bin, $algo) = @_;
     my $hex = unpack 'H*', $bin;
@@ -954,7 +956,8 @@ sub remove {
 
     $txn->txn_commit;
 
-    return wantarray ? @obj : \@obj;
+    return unless @obj;
+    wantarray ? @obj : $obj[0];
 }
 
 # also purges
@@ -1031,7 +1034,8 @@ sub forget {
 
     $txn->txn_commit;
 
-    wantarray ? @obj : \@obj;
+    return unless @obj;
+    wantarray ? @obj : $obj[0];
 }
 
 =head2 list
@@ -1051,6 +1055,7 @@ sub list {
 sub stats {
     my $self = shift;
 
+    # lol jeez get some self control
     my $ctl = $self->_control;
 
     my %x;
