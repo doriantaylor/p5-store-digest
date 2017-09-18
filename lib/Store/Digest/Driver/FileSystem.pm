@@ -8,7 +8,6 @@ use utf8;
 use Moose;
 use namespace::autoclean;
 
-with 'Store::Digest::Driver';
 
 use MooseX::Types::Moose qw(HashRef ArrayRef);
 use Store::Digest::Types qw(Directory DateTimeType Token);
@@ -30,13 +29,14 @@ use Math::BigInt ();
 use Scalar::Util ();
 use List::Util   ();
 
-use File::MimeInfo::Magic ();
-
 # directories
 use constant STORE   => 'store';
 use constant TEMP    => 'tmp';
 use constant INDEX   => 'index';
 use constant BUFSIZE => 2**13;
+
+with 'Role::MimeInfo';
+with 'Store::Digest::Driver';
 
 
 # digests with byte lengths
@@ -435,28 +435,28 @@ sub DEMOLISH {
 
 =cut
 
-# File::MimeInfo::mimetype_isa only tells you if the child type is an
-# immediate descendant of its parent, which is practically useless.
-sub _mimetype_isa_really {
-    my ($child, $ancestor) = @_;
-    return unless defined $child && defined $ancestor;
-    my @q = ($child);
-    my %t;
-    do {
-        for my $t (File::MimeInfo::mimetype_isa(shift @q)) {
-            $t = lc $t; # JIC
-            push @q, $t unless defined $t{$t};
-            $t{$t}++;
-        }
-    } while @q;
+# # File::MimeInfo::mimetype_isa only tells you if the child type is an
+# # immediate descendant of its parent, which is practically useless.
+# sub _mimetype_isa_really {
+#     my ($child, $ancestor) = @_;
+#     return unless defined $child && defined $ancestor;
+#     my @q = ($child);
+#     my %t;
+#     do {
+#         for my $t (File::MimeInfo::mimetype_isa(shift @q)) {
+#             $t = lc $t; # JIC
+#             push @q, $t unless defined $t{$t};
+#             $t{$t}++;
+#         }
+#     } while @q;
 
-    if (defined $ancestor) {
-        return !!$t{$ancestor};
-    }
-    else {
-        return sort keys %t;
-    }
-}
+#     if (defined $ancestor) {
+#         return !!$t{$ancestor};
+#     }
+#     else {
+#         return sort keys %t;
+#     }
+# }
 
 sub _file_for {
     my ($self, $digest) = @_;
@@ -703,9 +703,9 @@ sub add {
         $p{content} = $target->openr;
 
         # get the type by 'magic' if it's missing or incorrect
-        my $type = File::MimeInfo::Magic::mimetype($target->stringify);
+        my $type = $self->mimetype($target->stringify);
         $p{type} = $type
-            unless ($p{type} && _mimetype_isa_really($p{type}, $type));
+            unless ($p{type} && $self->mimetype_isa($p{type}, $type));
 
         # ctime is required
         $p{ctime} = $now;
@@ -859,8 +859,9 @@ sub _get {
 
     $txn->txn_commit;
 
-    # XXX this is no good
-    wantarray ? @obj : \@obj;
+    # i dunno what a better solution to this is
+    return unless @obj;
+    wantarray ? @obj : $obj[0];
 }
 
 sub _bin_inc {

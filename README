@@ -1,463 +1,59 @@
 NAME
-    Store::Digest::HTTP - Map HTTP methods and URI space to Store::Digest
+    Store::Digest - Store opaque data objects keyed on their cryptographic
+    digests
 
 VERSION
-    Version 0.01
+    Version 0.03
 
 SYNOPSIS
-        use Store::Digest::HTTP;
-
-        my $sd = Store::Digest::HTTP->new(store => $store);
-
-        # $request is a HTTP::Request, Plack::Request, Catalyst::Request
-        # or Apache2::RequestRec. $response is a Plack::Response.
-
-        my $response = $sd->respond($request);
-
-DESCRIPTION
-    This module provides a reference implementation for an HTTP interface to
-    Store::Digest, a content-addressable storage system based on RFC 6920
-    <http://tools.ietf.org/html/rfc6920> and named information ("ni:") URIs
-    and their HTTP expansions. It is intended to provide a generic,
-    content-based storage mechanism for opaque data objects, either uploaded
-    by users, or the results of computations. The goal of this system is to
-    act as a holding tank for both permanent storage and temporary caching,
-    with its preservation/expiration policy handled out of scope.
-
-    This module is designed with only a robust set of essential
-    functionality, with the expectation that it will be used as a foundation
-    for far more elaborate systems. Indeed, this module is conceived
-    primarily as an internal Web service which is only accessible by trusted
-    clients, even though through use it may be found to exhibit value as a
-    public resource.
-
-SECURITY
-    This module has *no concept* of access control, authentication or
-    authorization. Those concepts have been intentionally left out of scope.
-    There are more than enough existing mechanisms available to protect, for
-    instance, writing to and deleting from the store. Preventing
-    unauthorized reads is a little bit trickier.
-
-    The locations of the indexes can obviously be protected from
-    unauthorized reading through straight-forward authentication rules. The
-    contents of the store, however, will require an authorization system
-    which is considerably more sophisticated.
-
-  Scanning/Trawling
-    With the default SHA-256 digest algorithm, this (or any other)
-    implementation will keel over long before the distance between hash
-    values becomes short enough that a brute force scan will be feasible.
-    That won't stop people from trying. Likewise, by default, Store::Digest
-    computes (and this module exposes) shorter digests like MD5 for the
-    express purpose of matching objects to hashes in the event that that's
-    all you've got. If you don't want this behaviour, you can use external
-    access control mechanisms to wall off entire digest algorithms, or
-    consider disabling the computation of those algorithms altogether (since
-    in that case they're only costing you).
-
-    A persistent danger pertaining to the feasibility of scanning, and this
-    is untested, is if some algorithm or other *peaks*, statistically,
-    around certain values. This would drastically reduce the effort required
-    to score arbitrary hits, though they *would* be arbitrary.
-
-    For all other intents and purposes, the likelihood that an attacker
-    could correctly guess the location of a sensitive piece of data,
-    *especially* without setting off alarm bells, is infinitesimal.
-
-  *Go Fish* attacks
-    If an attacker has a particular data object, he/she can ask the system
-    if it has that object as well, simply by generating a digest and
-    crafting a "GET" request for it. This scenario is obviously completely
-    inconsequential, *except* for the rare case wherein you need to be able
-    to repudiate having some knowledge or other, at which point it could be
-    severely damaging.
-
-  Locking down individual objects
-    The objects in the store should be seen as *representations*: *images*
-    of information. It is entirely conceivable, if not expressly
-    anticipated, that two abstract resources, one public and one
-    confidential, could have *identical* literal representations, with
-    identical cryptographic signatures. This would amount to *one* object
-    being stored, presumably with *two* (or more) references to it inscribed
-    in some higher-level system. The difference between what is
-    confidential, and what is public, is in the context. As such, access
-    control to concrete *representations* should be mediated by access
-    control to abstract *resources*, in some other part of the system.
-
-RESOURCE TYPES
-    All resources respond to "OPTIONS" requests, which list available
-    methods. Requests for resources for methods that have not been specified
-    will result in a "405 Method Not Allowed" response.
-
-  Store contents: opaque data objects
-    These resources are identified by their full digest value. By default,
-    that means these URI paths:
-
-        /.well-known/[dn]i/{algorithm}/{digest}
-        /{algorithm}/{digest}
-
-    ...where "{algorithm}" is an active digest algorithm in the store, and
-    "{digest}" is a complete, "base64url" *or* hexadecimal-encoded
-    cryptographic digest. If the digest is hexadecimal, the request will be
-    redirected (301 for "GET"/"HEAD", 307 for the rest) to its "base64url"
-    equivalent.
-
-   "GET"/"HEAD"
-    When successful, this method returns the content of the identified
-    object. If the object has been deleted from the store, the response will
-    be "410 Gone". If it was never there in the first place, "404 Not
-    Found". If the "Accept-*" headers explicitly reject any of the
-    properties of the object, the response will properly be "406 Not
-    Acceptable".
-
-    Since these resources only have one representation which by definition
-    cannot be modified, the "If-*" headers respond appropriately. The ETag
-    of the object is equivalent to its "ni:" URI (in double quotes, as per
-    RFC 2616 <http://tools.ietf.org/html/rfc2616>).
-
-    If the request includes a "Range" header, the appropriate range will be
-    returned via "206 Partial Content". Note however that at this time,
-    multiple or non-byte ranges are not implemented, and such requests will
-    be met with a "501 Not Implemented" error.
-
-   "PUT"
-    A store object responds to "PUT" requests, primarily for the purpose of
-    symmetry, but it is also applicable to verifying arbitrary data objects
-    against supplied digests. That is, the URI of the "PUT" request must
-    match the actual digest of the object's contents in the given algorithm.
-    A mismatch between digest and content is interpreted as an attempt to
-    "PUT" the object in question in the wrong place, and is treated as "403
-    Forbidden".
-
-    If, however, the digest matches, the response will be either "204 No
-    Content" or "201 Created", depending on whether or not the object was
-    already in the store. A "PUT" request with a "Range" header makes no
-    sense in this context and is therefore not implemented, and will
-    appropriately respond with "501 Not Implemented".
-
-    Any "Date" header supplied with the request will become the "mtime" of
-    the stored object, and will be reflected in the "Last-Modified" header
-    in subsequent requests.
-
-   "DELETE"
-    Note: This module has *no* concept of access control.
-
-    This request, as expected, unquestioningly deletes a store object,
-    provided one is present at the requested URI. If it is, the response is
-    "204 No Content". If not, the response is either "404 Not Found" or "410
-    Gone", depending on whether or not there ever was an object at that
-    location.
-
-   "PROPFIND"
-    A handler for the "PROPFIND" request method is supplied to provide
-    direct access to the metadata of the objects in the store. Downstream
-    WebDAV applications can therefore use this module as a storage back-end
-    while only needing to interface at the level of HTTP and/or WebDAV.
-
-   "PROPPATCH"
-    Note: This module has *no* concept of access control.
-
-    The "PROPPATCH" method is supplied, first for parity with the "PROPFIND"
-    method, but also so that automated agents, such as syntax validators,
-    can directly update the objects' metadata with their findings.
-
-    Here are the DAV properties which are currently editable:
-
-    "creationdate"
-        This property sets the "mtime" of the stored object, *not* the
-        "ctime". The "ctime" of a Store::Digest::Object is the time it was
-        *added* to the store, *not* the modification time of the object
-        supplied when it was uploaded. Furthermore, per RFC 4918
-        <http://tools.ietf.org/html/rfc4918>, the "getlastmodified" property
-        SHOULD be considered *protected*. As such, the meanings of the
-        "creationdate" and "getlastmodified" properties are inverted from
-        their intuitive values.
-
-        (XXX: is this dumb? Will I regret it?)
-
-    "getcontentlanguage"
-        This property permits the data object to be annotated with one or
-        more RFC 3066 (5646) <http://tools.ietf.org/html/rfc5646> language
-        tags.
-
-    "getcontenttype"
-        This property permits automated agents to update the content type,
-        and when applicable, the character set of the object. This is useful
-        for providing an interface for storing the results of an
-        asynchronous verification of the store's contents through a trusted
-        mechanism, instead of relying on the claim of whoever uploaded the
-        object that these values match their contents.
-
-  Individual metadata
-    This is a read-only hypertext resource intended primarily as the
-    response content to a "POST" of a new storage object, such that the
-    caller can retrieve the digest value and other useful metadata. It also
-    doubles as a user interface for successive manual uploads, both as
-    interstitial feedback and as a control surface.
-
-   "GET"/"HEAD"
-        .../{algorithm}/{digest}?meta=true # not sure which of these yet
-        .../{algorithm}/{digest};meta      # ... can't decide
-
-    Depending on the "Accept" header, this resource will either return
-    RDFa-embedded (X)HTML, RDF/XML or Turtle (or JSON-LD, or whatever). The
-    HTML version includes a rudimentary interface to the
-    "multipart/form-data" "POST" target.
-
-  Partial matches
-    Partial matches are read-only resources that return a list of links to
-    stored objects. The purpose is to provide an interface for retrieving an
-    object from the store when only the first few characters of its digest
-    are known. These resources are mapped under the following URI paths by
-    default:
-
-        /.well-known/[dn]i/{algorithm}/{partial-digest}
-        /.well-known/[dn]i/{partial-digest}
-        /{algorithm}/{partial-digest}
-        /{partial-digest}
-
-    ...where "{algorithm}" is an active digest algorithm in the store, and
-    "{partial-digest}" is an *in*complete, "base64url" or
-    hexadecimal-encoded cryptographic digest, that is, one that is *shorter*
-    than the appropriate length for the given algorithm. If the path is
-    given with no algorithm, the length of the digest content doesn't
-    matter, and all algorithms will be searched.
-
-   "GET"/"HEAD"
-    A "GET" request will return a simple web page containing a list of links
-    to the matching objects. If exactly one object matches, the response
-    will be "302 Found" (in case additional objects match in the future). If
-    no objects match, the response will be "404 Not Found". If multiple
-    objects match, this response will be returned with a "300 Multiple
-    Choices" status, to reinforce the transient nature of the resource.
-
-    TODO: find or make an appropriate collection vocab, then implement RDFa,
-    RDF/XML, N3/Turtle, and JSON-LD variants.
-
-   "PROPFIND"
-    TODO: A "PROPFIND" response, if it even makes sense to implement, will
-    almost certainly be contingent on whatever vocab I decide on.
-
-  Resource collections
-    These collections exist for diagnostic purposes, so that during
-    development we may examine the contents of the store without any
-    apparatus besides a web browser. By default, the collections are bound
-    to the following URI paths:
-
-        /.well-known/[dn]i/{algorithm}/
-        /{algorithm}/
-
-    The only significance of the "{algorithm}" in the URI path is as a
-    residual sorting parameter, to be used only after the contents of the
-    store have been sorted by all other specified parameters. Otherwise the
-    results are the same for all digest algorithms. The default sorting
-    behaviour is to ascend lexically, first by type, then modification time
-    (then tiebreak by whatever other means remain).
-
-   "GET"/"HEAD"
-    These resources are bona fide collections and will reflect the
-    convention by redirecting via "301 Moved Permanently" to a path with a
-    trailing slash "/". (Maybe?)
-
-    This is gonna have to respond to filtering, sort order and pagination.
-
-    (optional application/atom+xml variant?)
-
-    Here are the available parameters:
-
-    "tz" (ISO 8601 time zone)
-        Resolve date parameters against this time zone rather than the
-        default (UTC).
-
-            tz=-0800
-
-        (XXX: use Olson rather than ISO-8601 so we don't have to screw
-        around with daylight savings? whynotboth.gif?)
-
-    "boundary"
-        Absolute offset of bounding record, starting with 1. One value
-        present sets the upper bound; two values define an absolute range:
-
-            boundary=100              # 1-100
-            boundary=1&boundary=100   # same thing
-            boundary=101&boundary=200 # 101-200
-
-    "sort" (Filter parameter name)
-        One or more instances of this parameter, in the order given,
-        override the default sorting criterion, which is this:
-
-            sort=type&sort=mtime
-
-    "reverse" (Boolean)
-        Flag for specifying a reverse sort order:
-
-            reverse=true
-
-    "complement" (Filter parameter name)
-        Use the complement of the specified filter criteria:
-
-            type=text/html&complement=type # everything but text/html
-
-    Here are the sorting/filtering criteria:
-
-    "size"
-        The number of bytes, as a range. One for lower bound, two for a
-        range:
-
-            size=1048576     # at least a megabyte
-            size=0&size=1024 # no more than a kilobyte
-
-    "type"
-        The "Content-Type" of the object. Enumerable:
-
-            type=text/html&type=text/plain&type=application/xml
-
-    "charset"
-        The character set of the object. Enumerable:
-
-            charset=utf-8&charset=iso-8859-1&charset=windows-1252
-
-    "encoding"
-        The "Content-Encoding" of the object. Enumerable:
-
-            encoding=gzip&encoding=bzip2&encoding=identity
-
-    "ctime"
-        The *creation* time, as in the time the object was added to the
-        store. One for *lower* bound, two for range:
-
-            ctime=2012-01-01 # everything added since January 1, 2012
-            ctime=2012-01-01&ctime=2012-12-31 # only the year of 2012
-
-        Applying "complement" to this parameter turns the one-instance form
-        into an *upper* bound, and the range to mean everything *but* its
-        contents. This parameter takes ISO 8601 datetime strings or subsets
-        thereof, or epoch seconds.
-
-    "mtime"
-        Same syntax as "ctime", except concerns the modification time
-        supplied by the *user* when the object was inserted into the store.
-
-    "ptime"
-        Same as above, except concerns the latest time at which only the
-        *metadata* of the object was modified.
-
-    "dtime"
-        Same as above, except concerns the latest time the object was
-        *deleted*. As should be expected, if this parameter is used, objects
-        which are currently present in the store will be omitted. Only the
-        traces of deleted objects will be shown.
-
-   "PROPFIND"
-    TODO: Again, "PROPFIND" responses, not sure how to define 'em at this
-    time.
-
-  Summary and usage statistics
-    This resource acts as the "home page" of this module. Here we can
-    observe the contents of Store::Digest::Stats, such as number of objects
-    stored, global modification times, storage consumption , reclaimed,
-    space, etc. We can also choose our preferred time zone and digest
-    algorithm for browsing the store's contents, as well as upload a new
-    file.
-
-   "GET"/"HEAD"
-    Depending on the "Accept" header, this handler returns a simple web page
-    or set of RDF triples.
-
-   "PROPFIND"
-    TODO: Define RDF vocab before PROPFIND.
-
-  "POST" target, raw
-    This is a URI that only handles POST requests, which enable a thin
-    (e.g., API) HTTP client to upload a data object without the effort or
-    apparatus needed to compute its digest. Headers of interest to the
-    request are naturally "Content-Type", and "Date". The path of this URI
-    is set in the constructor, and defaults to:
-
-        /0c17e171-8cb1-4c60-9c58-f218075ae9a9
-
-   "POST"
-    This response accepts the request content and attempts to store it. If
-    unsuccessful, it will return either "507 Insufficient Storage" or "500
-    Internal Server Error". If successful, the response will redirect via
-    "303 See Other" to the appropriate "Individual metadata" resource.
-
-    This resource is intended to be used in a pipeline with other web
-    service code. "POST"ed request entities to this location will be
-    inserted into the store *as-is*. Do not "POST" to this location from a
-    Web form unless that's what you want to have happen. Use the other
-    target instead.
-
-    The contents of the following request headers are stored along with the
-    content of the request body:
-
-    *   "Content-Type"
-
-    *   "Content-Language"
-
-    *   "Content-Encoding"
-
-    *   "Date"
-
-  "POST" target, multipart/form-data
-    This resource behaves identically to the one above, except that takes
-    its data from "multipart/form-data" fields rather than headers. This
-    resource is designed as part of a *rudimentary* interface for adding
-    objects to the store. It is intended for use during development and
-    explicitly *not* for production, outside the most basic requirements.
-    Its default URI path, also configurable in the constructor, is:
-
-        /12d851b7-5f71-405c-bb44-bd97b318093a
-
-   "POST"
-    This handler expects a "POST" request with "multipart/form-data" content
-    *only*; any other content type will result in a "409 Conflict". The same
-    response will occur if the request body does not contain a file part.
-    Malformed request content will be met with a "400 Bad Request". The
-    handler will process *only* the *first* file part found in the request
-    body; it will ignore the field name. If there are "Content-Type",
-    "Date", etc. headers in the MIME subpart, those will be stored. The
-    file's name, if supplied, is ignored, since mapping names to content is
-    deliberately out of scope for Store::Digest.
+        use Store::Digest;
+
+        my $store = Store::Digest->new(
+            driver  => 'FileSystem',
+            # all other options pass through to the driver
+            dir     => '/var/db/store-digest',
+        );
+
+        my $obj = $store->add(
+            content  => $fh,
+            language => 'en',
+            mtime    => DateTime->now,
+        );
 
 METHODS
-  new
-        my $sdh = Store::Digest::HTTP->new(store => $store);
-
-    store
-        This is a reference to a Store::Digest object.
-
-    base
-        This is the base URI path, which defaults to "/.well-known/ni/".
-
-    post_raw
-        This overrides the location of the raw "POST" target, which defaults
-        to "/0c17e171-8cb1-4c60-9c58-f218075ae9a9".
-
-    post_form
-        This overrides the location of the form-interpreted "POST" target,
-        which defaults to "/12d851b7-5f71-405c-bb44-bd97b318093a".
-
-        If the
-
-    param_map
-        Any of the URI query parameters used in this module can be remapped
-        to different literals using a HASH reference like so:
-
-            # in case 'mtime' collides with some other parameter elsewhere
-            { modified => 'mtime' }
-
-  respond
-        my $response = $sdh->respond($request);
-
-TO DO
-    I think diff coding/instance manipulation (RFC 3229
-    <http://tools.ietf.org/html/rfc3229> and RFC 3284
-    <http://tools.ietf.org/html/rfc3284>) would be pretty cool. Might be
-    better handled by some other module,
-
+  function1
 AUTHOR
     Dorian Taylor, "<dorian at cpan.org>"
+
+BUGS
+    Please report any bugs or feature requests to "bug-store-digest at
+    rt.cpan.org", or through the web interface at
+    <http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Store-Digest>. I will be
+    notified, and then you'll automatically be notified of progress on your
+    bug as I make changes.
+
+SUPPORT
+    You can find documentation for this module with the perldoc command.
+
+        perldoc Store::Digest
+
+    You can also look for information at:
+
+    *   RT: CPAN's request tracker (report bugs here)
+
+        <http://rt.cpan.org/NoAuth/Bugs.html?Dist=Store-Digest>
+
+    *   AnnoCPAN: Annotated CPAN documentation
+
+        <http://annocpan.org/dist/Store-Digest>
+
+    *   CPAN Ratings
+
+        <http://cpanratings.perl.org/d/Store-Digest>
+
+    *   Search CPAN
+
+        <http://search.cpan.org/dist/Store-Digest/>
 
 LICENSE AND COPYRIGHT
     Copyright 2012 Dorian Taylor.
