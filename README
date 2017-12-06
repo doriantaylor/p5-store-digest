@@ -3,7 +3,7 @@ NAME
     digests
 
 VERSION
-    Version 0.03
+    Version 0.03_01
 
 SYNOPSIS
         use Store::Digest;
