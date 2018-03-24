@@ -19,7 +19,7 @@ use BerkeleyDB qw(DB_CREATE DB_GET_BOTH DB_INIT_CDB DB_INIT_LOCK
                   DB_INIT_LOG DB_INIT_TXN DB_INIT_MPOOL DB_NEXT
                   DB_SET_RANGE DB_GET_BOTH DB_GET_BOTH_RANGE
                   DB_RECOVER DB_RECOVER_FATAL DB_DONOTINDEX
-                  DB_DUP DB_DUPSORT DB_DIRTY_READ DB_AUTO_COMMIT);
+                  DB_DUP DB_DUPSORT DB_DIRTY_READ DB_AUTO_COMMIT DB_HASH);
 
 use Path::Class  ();
 use File::Copy   ();
@@ -32,6 +32,7 @@ use List::Util   ();
 # directories
 use constant STORE   => 'store';
 use constant TEMP    => 'tmp';
+use constant CONTROL => 'control';
 use constant INDEX   => 'index';
 use constant BUFSIZE => 2**13;
 
@@ -113,11 +114,11 @@ Store::Digest::Driver::FileSystem - File system driver for Store::Digest
 
 =head1 VERSION
 
-Version 0.04
+Version 0.05
 
 =cut
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 # target directory
 has dir => (
@@ -144,7 +145,7 @@ has _env => (
 # metadata for the actual database
 has _control => (
     is  => 'rw',
-    isa => 'BerkeleyDB::Hash',
+    isa => 'BerkeleyDB::Btree',
 );
 
 # the payload data itself
@@ -200,6 +201,84 @@ sub _create_dirs {
     }
 }
 
+# attempt to create a btree control file; rescue from the stupid
+# stupid stupid stupid idea that this should be a hash
+sub _init_control {
+    my $self = shift;
+
+    my $env  = $self->_env;
+    my $mode = 0666 & ~$self->umask;
+    my $file = $self->dir->absolute->file(CONTROL);
+
+    my $control;
+
+    if (-e $file) {
+        $control = BerkeleyDB::Unknown->new(
+            -Env      => $env,
+            -Flags    => DB_AUTO_COMMIT,
+            -Mode     => $mode,
+            -Filename => CONTROL,
+        ) or Carp::croak
+            ("Could not initialize control database: $BerkeleyDB::Error");
+
+        if ($control->type == DB_HASH) {
+            my $c2 = BerkeleyDB::Btree->new(
+                -Env      => $env,
+                -Flags    => DB_CREATE|DB_AUTO_COMMIT,
+                -Mode     => $mode,
+                -Filename => CONTROL . 2,
+            ) or Carp::croak
+                ("Could not create replacement control: $BerkeleyDB::Error");
+
+            my $txn = $env->txn_begin;
+            $txn->Txn($control, $c2);
+
+            my $cur = $control->db_cursor;
+            my ($k, $v, $ret) = ('', '', 0);
+            while ($cur->c_get($k, $v, DB_NEXT) == 0) {
+                #warn "wat $k $v";
+                $ret += $c2->db_put($k, $v);
+            }
+            Carp::croak("Could not copy database: $BerkeleyDB::Error") if $ret;
+            undef $cur;
+
+            unless ($txn->txn_commit == 0) {
+                die 'Could not copy contents from old control database to new!';
+            }
+
+            $env->txn_checkpoint(0, 0);
+
+            # require Data::Dumper;
+            # warn Data::Dumper::Dumper($env->txn_stat);
+
+            undef $txn;
+
+            $control->db_close;
+            $c2->db_close;
+            undef $control;
+            undef $c2;
+
+            # note OK is zero hence `and`
+            BerkeleyDB::db_remove(-Env => $env, -Filename => CONTROL)
+                  and die 'Could not delete old hash-based control database!: '
+                      . $BerkeleyDB::Error;
+            BerkeleyDB::db_rename
+                  (-Env => $env, -Filename => CONTROL . 2, -Newname => CONTROL)
+                      and die 'Could not rename new B+Tree control database!: '
+                          . $BerkeleyDB::Error;
+        }
+    }
+
+    $control ||= BerkeleyDB::Btree->new(
+        -Env      => $env,
+        -Flags    => DB_CREATE|DB_AUTO_COMMIT,
+        -Mode     => $mode,
+        -Filename => CONTROL,
+    ) or Carp::croak
+        ("Could not initialize (B+Tree) control database: $BerkeleyDB::Error");
+
+    $control;
+}
 
 sub BUILD {
     my $self = shift;
@@ -221,22 +300,23 @@ sub BUILD {
 
     $self->_env($env);
 
-    my $txn = $env->txn_begin;
-
     # create control
-    my $control = BerkeleyDB::Hash->new(
-        -Env      => $env,
-        -Flags    => DB_CREATE|DB_AUTO_COMMIT,
-        -Mode     => $mode,
-        #-Txn      => $txn,
-        -Filename => 'control',
-    ) or Carp::croak
-        ("Can't create/bind control database: $BerkeleyDB::Error");
+    # my $control = BerkeleyDB::Hash->new(
+    #     -Env      => $env,
+    #     -Flags    => DB_CREATE|DB_AUTO_COMMIT,
+    #     -Mode     => $mode,
+    #     #-Txn      => $txn,
+    #     -Filename => 'control',
+    # ) or Carp::croak
+    #     ("Can't create/bind control database: $BerkeleyDB::Error");
+    my $control = $self->_init_control;
+    # exit;
+    $self->_control($control);
 
+    my $txn = $env->txn_begin;
     # add to transaction
     $control->Txn($txn);
 
-    $self->_control($control);
 
     # control stores:
 
@@ -442,6 +522,8 @@ sub DEMOLISH {
 }
 
 =head2 add
+
+Add an object to the store.
 
 =cut
 
@@ -794,9 +876,9 @@ sub get {
     my $bin  = $digest->digest;
     utf8::downgrade($bin); # JIC
 
-    my @out = $self->_get($bin, $algo);
+    my @out = $self->_get($bin, $algo) or return;
 
-    wantarray ? @out : \@out;
+    wantarray ? @out : $out[0];
 }
 
 sub _get {
@@ -1070,26 +1152,25 @@ sub stats {
 
     my %x;
     for my $k (qw(objects deleted bytes ctime mtime)) {
-        $ctl->db_get($k, my $val);
+        die "INTERNAL ERROR: Control database has failed to store $k"
+            unless $ctl->db_get($k, my $val) == 0;
         $x{$k} = $val;
     }
 
-    # fix these
+    # fix these into datetime objects
     $x{created}  = DateTime->from_epoch(epoch => delete $x{ctime});
     $x{modified} = DateTime->from_epoch(epoch => delete $x{mtime});
 
     Store::Digest::Stats->new(%x);
 }
 
-# beginning to think i should index by ctime/mtime/dtime/type/encoding
-
 =head1 AUTHOR
 
-Dorian Taylor, C<< <dorian at cpan.org> >>
+Dorian Taylor, C<E<lt>dorian at cpan.orgE<gt>>
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright 2012 Dorian Taylor.
+Copyright 2012-2018 Dorian Taylor.
 
 Licensed under the Apache License, Version 2.0 (the "License"); you
 may not use this file except in compliance with the License. You may
