@@ -233,7 +233,11 @@ sub BUILD {
     ) or Carp::croak
         ("Can't create/bind control database: $BerkeleyDB::Error");
 
+    # add to transaction
+    $control->Txn($txn);
+
     $self->_control($control);
+
     # control stores:
 
     # algorithms used
@@ -322,8 +326,6 @@ sub BUILD {
         $control->db_put(mtime => $now);
     }
 
-
-
     # create algo btrees, these enable partial matches
     my $pri  = $self->_primary;
     my $ent  = $self->_entries;
@@ -334,6 +336,9 @@ sub BUILD {
         -Filename => $pri,
     ) or Carp::croak
         ("Can't create/bind primary database $pri: $BerkeleyDB::Error");
+
+    # add primary database to transaction
+    $primary->Txn($txn);
 
     my @rest = grep { $_ ne $pri } @{$self->_algorithms};
     for my $i (0..$#rest) {
@@ -372,6 +377,9 @@ sub BUILD {
         ) or Carp::croak
             ("Can't create/bind $k index database: $BerkeleyDB::Error");
 
+        # add index db to transaction
+        $index->Txn($txn);
+
         # add this to initialization queue
         my $st = $index->db_stat;
         if ($st->{bt_nkeys} == 0) {
@@ -406,7 +414,9 @@ sub BUILD {
         }
     }
 
-    $txn->txn_commit;
+    unless ($txn->txn_commit == 0) {
+        die "Could not commit initialization transaction: $BerkeleyDB::Error";
+    }
 
     # hashes ctime atime dtime type language encoding charset
     #$self->_entries($entries);
@@ -815,9 +825,9 @@ sub _get {
     # pad the key too
     $bin .= ("\0" x ($DIGESTS{$algo} - length $bin));
 
-    #warn $algo;
-    #warn unpack('H*', $bin);
-    #warn unpack('H*', $last);
+    # warn $algo;
+    # warn unpack('H*', $bin);
+    # warn unpack('H*', $last);
 
     my @obj;
     my $rec;
@@ -838,7 +848,6 @@ sub _get {
         #warn "$algo ne $pri";
         my $pk;
         while ($cursor->c_pget($d, $pk, $rec, $flag) == 0) {
-            last if $d gt $last;
 
             #warn unpack 'H*', $d;
             #warn unpack 'H*', $pk;
@@ -850,6 +859,7 @@ sub _get {
             # to set the key manually, and this is the easiest way to
             # do it.
             $d = $obj->digest($algo)->digest;
+            last if $d gt $last;
 
             push @obj, $obj;
 

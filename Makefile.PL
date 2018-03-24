@@ -29,7 +29,7 @@ build_requires (
 );
 
 requires (
-    'BerkeleyDB'               => '0.51',
+    'BerkeleyDB'               => '0.55',
     'Class::Load'              => '0.23',
     'DateTime'                 => '0.70',
     'File::Copy'               => '2.21',
