@@ -1,5 +1,9 @@
 Revision history for Store-Digest
 
+0.04    Fri Mar 23 18:11:39 PDT 2018
+        - (maybe?) fixed issues with control database not storing mtime
+        - definitely fixed issue with partial retrieval of non-primary hash
+
 0.03_01 Tue Dec 05 23:23:29 PST 2017
         ah crap bunged up the manifest
 
@@ -9,7 +13,3 @@ Revision history for Store-Digest
 
 0.02    Sun Nov 29 12:01:29 PST 2015
         Berkeley DB was storing keys in UTF8 rather than binary. Bad. 
-
-0.01    Date/time
-        First version, released on an unsuspecting world.
-

@@ -49,6 +49,8 @@ requires (
     'XML::LibXML::LazyBuilder' => '0.05',   # http
 );
 
+clean_files 't/content';
+
 install_as_cpan;
 auto_install;
 WriteAll;

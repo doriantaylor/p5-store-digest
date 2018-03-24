@@ -9,6 +9,8 @@ use Test::More tests => 4;
 
 use_ok('Store::Digest::Driver::FileSystem');
 
+diag("DB version: $BerkeleyDB::db_version");
+
 my $driver = Store::Digest::Driver::FileSystem->new(dir => 't/content');
 
 my $mf = Path::Class::File->new('Makefile.PL');
@@ -21,8 +23,8 @@ my $obj = $driver->add(content => $fh, mtime => $stat->mtime);
 
 diag($obj->as_string);
 
-my @objs = $driver->get(URI->new('ni:///md5;xh0N'));
-#my @objs = $driver->get(URI->new('ni:///sha-256;ELOy'));
+my @objs = $driver->get(URI->new('ni:///md5;lSF_'));
+#my @objs = $driver->get(URI->new('ni:///sha-256;Icnx'));
 
 ok(scalar @objs, 'successfully retrieved objects from partial match');
 

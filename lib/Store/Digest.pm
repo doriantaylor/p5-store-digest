@@ -22,11 +22,11 @@ Store::Digest - Store opaque data objects keyed on their cryptographic digests
 
 =head1 VERSION
 
-Version 0.03_01
+Version 0.04
 
 =cut
 
-our $VERSION = '0.03_01';
+our $VERSION = '0.04';
 
 has _driver => (
     is      => 'rw',
