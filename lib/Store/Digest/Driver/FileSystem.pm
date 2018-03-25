@@ -114,11 +114,11 @@ Store::Digest::Driver::FileSystem - File system driver for Store::Digest
 
 =head1 VERSION
 
-Version 0.05
+Version 0.06
 
 =cut
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 # target directory
 has dir => (
@@ -240,6 +240,8 @@ sub _init_control {
                 $ret += $c2->db_put($k, $v);
             }
             Carp::croak("Could not copy database: $BerkeleyDB::Error") if $ret;
+
+            $cur->c_close;
             undef $cur;
 
             unless ($txn->txn_commit == 0) {
@@ -310,13 +312,11 @@ sub BUILD {
     # ) or Carp::croak
     #     ("Can't create/bind control database: $BerkeleyDB::Error");
     my $control = $self->_init_control;
-    # exit;
     $self->_control($control);
 
     my $txn = $env->txn_begin;
     # add to transaction
     $control->Txn($txn);
-
 
     # control stores:
 
@@ -353,7 +353,10 @@ sub BUILD {
         my $v = join ',', @$w;
 
         $self->_algorithms($w);
-        $control->db_put(algorithms => $v);
+        unless ($control->db_put(algorithms => $v) == 0) {
+            die 'INTERNAL ERROR: could not store control data (algorithms): ' .
+                $BerkeleyDB::Error;
+        }
     }
 
     # primary algorithm
@@ -377,34 +380,60 @@ sub BUILD {
                   unless grep { $_ eq $v } @{$self->_algorithms};
 
         $self->_primary($v);
-        $control->db_put(primary => $v);
+        unless ($control->db_put(primary => $v) == 0) {
+            die 'INTERNAL ERROR: could not store control data (primary): ' .
+                $BerkeleyDB::Error;
+        }
     }
 
     # total number of known hash entries
     unless ($control->db_get(objects => my $v) == 0) {
-        $control->db_put(objects => 0);
+        unless ($control->db_put(objects => 0) == 0) {
+            die 'INTERNAL ERROR: could not store control data (objects): ' .
+                $BerkeleyDB::Error;
+        }
     }
 
     # total number of hash entries where the payloads were removed
     unless ($control->db_get(deleted => my $v) == 0) {
-        $control->db_put(deleted => 0);
+        unless ($control->db_put(deleted => 0) == 0) {
+            die 'INTERNAL ERROR: could not store control data (deleted): ' .
+                $BerkeleyDB::Error;
+        }
     }
 
     # total number of bytes stored
     unless ($control->db_get(bytes => my $v) == 0) {
-        $control->db_put(bytes => 0);
+        unless ($control->db_put(bytes => 0) == 0) {
+            die 'INTERNAL ERROR: could not store control data (bytes): ' .
+                $BerkeleyDB::Error;
+        }
     }
 
 
     # store-wide creation and modification times
     my $now = time;
     unless ($control->db_get(ctime => my $v) == 0) {
-        $control->db_put(ctime => $now);
+        unless ($control->db_put(ctime => $now) == 0) {
+            die 'INTERNAL ERROR: could not store control data (ctime): ' .
+                $BerkeleyDB::Error;
+        }
     }
 
     unless ($control->db_get(mtime => my $v) == 0) {
-        $control->db_put(mtime => $now);
+        unless ($control->db_put(mtime => $now) == 0) {
+            die 'INTERNAL ERROR: could not store control data (mtime): ' .
+                $BerkeleyDB::Error;
+        }
     }
+
+    unless ($txn->txn_commit == 0) {
+        die 'INTERNAL ERROR: Could not commit transaction on control data: ' .
+            $BerkeleyDB::Error;
+    }
+
+    # renew transaction
+    $txn = $env->txn_begin;
 
     # create algo btrees, these enable partial matches
     my $pri  = $self->_primary;
@@ -488,6 +517,9 @@ sub BUILD {
                 }
             }
         }
+
+        $cursor->c_close;
+        undef $cursor;
 
         for my $ix (keys %init) {
             $primary->associate($meta->{$ix}, $self->_meta_keyfunc($ix));
@@ -675,11 +707,11 @@ sub add {
     my ($self, %p) = @_;
     my $pri = $self->_primary;
     my $ctl = $self->_control;
+    my $env = $self->_env;
 
     # open transactions on all databases
-    my $txn = $self->_env->txn_begin or Carp::croak
-        ("Could not open transaction: $BerkeleyDB::Error "
-             . $self->_env->status);
+    my $txn = $env->txn_begin or Carp::croak
+        ("Could not open transaction: $BerkeleyDB::Error " . $env->status);
     $txn->Txn($ctl, values %{$self->_entries});
 
     # Step 1: record digests as we read the content handle into a
@@ -740,7 +772,7 @@ sub add {
         File::Copy::move($tempname, $target);
     }
 
-    # Step 2: alter database entries
+    # Step 3: alter database entries
 
     my $db  = $self->_entries->{$pri};
     my $now = time;
@@ -750,6 +782,7 @@ sub add {
     my $rec = '';
     utf8::downgrade($rec);
     $db->db_get($bin, $rec);
+
     if ($rec) {
         # create an object because it's easier to deal with
         $obj = $self->_inflate($bin, $rec);
@@ -760,35 +793,36 @@ sub add {
         if ($obj->dtime and $obj->dtime->epoch > 0) {
             $obj->dtime(undef);
 
+            my $nok = 0;
+
             # don't forget to decrement the deleted count by 1
             $ctl->db_get(deleted => my $deleted);
-            $ctl->db_put(deleted =>  --$deleted) if $deleted > 0;
+            $nok += $ctl->db_put
+                (deleted => ($deleted && $deleted > 0 ? $deleted - 1 : 0));
             # and no matter what, we don't want this number to be negative
 
             # set the modification time as well
-            $ctl->db_put(mtime   => $now);
+            $nok += $ctl->db_put(mtime => $now);
+
+            if ($nok) {
+                $txn->txn_abort;
+                die 'INTERNAL ERROR: Could not modify control database: ' .
+                    $BerkeleyDB::Error;
+            }
 
             # overwrite the record
             $rec = $self->_deflate($obj);
+
             # XXX ???? WTF how many times do i have to re-downgrade
             utf8::downgrade($rec);
-            #warn utf8::is_utf8($rec);
 
-            $db->db_put($bin, $rec);
-            #$db->db_sync;
+            unless ($db->db_put($bin, $rec) == 0) {
+                die 'INTERNAL ERROR: Could not modify digest database: ' .
+                    $BerkeleyDB::Error;
+            }
         }
     }
     else {
-        # set the mappings for the other digest algorithms
-        # my $e = $self->_entries;
-        # for my $algo (grep { $_ ne $pri } @{$self->_algorithms}) {
-        #     my $k = $p{digests}{$algo}->digest;
-        #     utf8::downgrade($k); # dat utf8
-
-        #     $e->{$algo}->db_put($k, $bin);
-        #     #$e->{$algo}->db_sync;
-        # }
-
         # tie up loose ends re the file
         my $stat    = $target->stat;
         $p{size}    = $stat->size;
@@ -803,32 +837,43 @@ sub add {
         $p{ctime} = $now;
 
         # now for the control db
+        my $nok = 0;
 
         # increment byte count by file size
         $ctl->db_get(bytes   => my $bytes);
-        $ctl->db_put(bytes   => $bytes += $p{size});
+        $nok += $ctl->db_put(bytes   => ($bytes || 0) + $p{size});
         # increment object count by 1
         $ctl->db_get(objects => my $objects);
-        $ctl->db_put(objects =>  ++$objects);
+        $nok += $ctl->db_put(objects => ($objects || 0) + 1);
         # set the modification time
-        $ctl->db_put(mtime   => $now);
+        $nok += $ctl->db_put(mtime   => $now);
+
+        if ($nok) {
+            $txn->txn_abort;
+            die 'INTERNAL ERROR: Could not modify control database: ' .
+                $BerkeleyDB::Error;
+        }
 
         # create the new object
         $obj = Store::Digest::Object->new(%p);
 
         # overwrite the record
         $rec = $self->_deflate($obj);
+
         # XXX ???? WTF
         utf8::downgrade($rec);
-        #warn utf8::is_utf8($rec);
-        $db->db_put($bin, $rec);
-        #$db->db_sync;
+
+        unless ($db->db_put($bin, $rec) == 0) {
+            die 'INTERNAL ERROR: Could not modify digest database: ' .
+                $BerkeleyDB::Error;
+        }
     }
 
     # Step 4: commit the changes
 
     unless ($txn->txn_commit == 0) {
-        Carp::croak($BerkeleyDB::Error);
+        die 'INTERNAL ERROR: Could not commit transaction: ' .
+            $BerkeleyDB::Error;
     }
 
     # Step 5: return the object
@@ -948,6 +993,9 @@ sub _get {
             $d = _bin_inc($d, $algo);
         }
     }
+
+    $cursor->c_close;
+    undef $cursor;
 
     $txn->txn_commit;
 
