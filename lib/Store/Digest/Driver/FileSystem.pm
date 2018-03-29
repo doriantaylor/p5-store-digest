@@ -694,6 +694,8 @@ sub _inflate {
 
     if ($file) {
         my $stat    = $file->stat;
+        Carp::croak("Cannot read file for $rec{$pri}")
+              unless $stat and $stat->cando(256, 1); # S_IRUSR
         $p{size}    = $stat->size;
         $p{content} = sub { $file->openr };
     }
