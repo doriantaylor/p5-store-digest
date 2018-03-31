@@ -114,11 +114,11 @@ Store::Digest::Driver::FileSystem - File system driver for Store::Digest
 
 =head1 VERSION
 
-Version 0.06
+Version 0.07
 
 =cut
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 # target directory
 has dir => (
@@ -208,6 +208,7 @@ sub _init_control {
 
     my $env  = $self->_env;
     my $mode = 0666 & ~$self->umask;
+    #warn sprintf '%o', $mode;
     my $file = $self->dir->absolute->file(CONTROL);
 
     my $control;
@@ -285,6 +286,9 @@ sub _init_control {
 sub BUILD {
     my $self = shift;
 
+    # set the umask when we create the databases
+    my $omask = umask $self->umask;
+
     $self->_create_dirs;
 
     my $mode = 0666 & ~$self->umask;
@@ -292,13 +296,20 @@ sub BUILD {
     #warn $self->dir->absolute;
     my $flags = DB_CREATE|DB_INIT_MPOOL|DB_INIT_TXN|
         DB_INIT_LOCK|DB_INIT_LOG|DB_RECOVER;
-    my $env = BerkeleyDB::Env->new(
+    my %envp = (
         -Home    => $self->dir->absolute->stringify,
         -Mode    => $mode,
         -Flags   => $flags,
         -ErrFile => $self->dir->absolute->file('error.log')->stringify,
-    ) or Carp::croak
+    );
+
+    # this key is valid if and only if we're running my hacked version
+    $envp{-LogFileMode} = $mode if BerkeleyDB::Env->can('set_lg_filemode');
+
+    my $env = BerkeleyDB::Env->new(%envp) or Carp::croak
         ("Can't create transaction environment: $BerkeleyDB::Error");
+
+    #warn 'no set_lg_filemode' unless BerkeleyDB::Env->can('set_lg_filemode');
 
     $self->_env($env);
 
@@ -530,8 +541,8 @@ sub BUILD {
         die "Could not commit initialization transaction: $BerkeleyDB::Error";
     }
 
-    # hashes ctime atime dtime type language encoding charset
-    #$self->_entries($entries);
+    # reset umask to whatever it was before
+    umask $omask;
 }
 
 sub DEMOLISH {
@@ -765,6 +776,9 @@ sub add {
         unlink $tempname;
     }
     else {
+        # change the umask to the desired value
+        my $omask = umask $self->umask;
+
         my $mode = 0777 & ~$self->umask | 02000;
         my $parent = $target->parent;
         eval { $parent->mkpath(0, $mode) };
@@ -772,6 +786,9 @@ sub add {
 
         # ONLY IF MISSING DO YOU ADD THE FILE
         File::Copy::move($tempname, $target);
+
+        # now change it back to whatever it was before
+        umask $omask;
     }
 
     # Step 3: alter database entries

@@ -11,7 +11,10 @@ use_ok('Store::Digest::Driver::FileSystem');
 
 diag("DB version: $BerkeleyDB::db_version");
 
-my $driver = Store::Digest::Driver::FileSystem->new(dir => 't/content');
+my $driver = Store::Digest::Driver::FileSystem->new(
+    dir   => 't/content',
+    umask => 007,
+);
 
 my $mf = Path::Class::File->new('Makefile.PL');
 
